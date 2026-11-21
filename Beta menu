@@ -59,7 +59,7 @@ local function getDefaultConfig()
 		ESPMaxDistance = 1000,
 		AutoLoadEnabled = false,
 		SaveName = "Default",
-		DebugLog = false
+		DebugLog = true
 	}
 end
 
@@ -979,8 +979,19 @@ local function updateESPVisuals(cam, originPos)
 				local rx, ry, rz = rootPt.X, rootPt.Y, rootPt.Z
 
 				if onRoot and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.05 then
-					local boxHeight = math.clamp(920 / math.max(rz, 1.2), 20, vp.Y * 0.75)
-					local boxWidth = math.clamp(boxHeight * 0.58, 14, vp.X * 0.45)
+					local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
+						and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.55, 0))
+						or (anchor.Position + Vector3.new(0, 3.0, 0))
+					local botWorld = anchor.Position - Vector3.new(0, 3.0, 0)
+					local topPt = cam:WorldToViewportPoint(topWorld)
+					local botPt = cam:WorldToViewportPoint(botWorld)
+
+					local rawSpanY = (isFiniteNumber(topPt.Y) and isFiniteNumber(botPt.Y) and topPt.Z > 0 and botPt.Z > 0)
+						and math.abs(botPt.Y - topPt.Y)
+						or (1550 / math.max(rz, 1.0))
+
+					local boxHeight = math.clamp(rawSpanY * 1.12, 22, vp.Y * 0.92)
+					local boxWidth = math.clamp(boxHeight * 0.62, 16, vp.X * 0.55)
 					local boxLeft = math.floor(rx - boxWidth * 0.5)
 					local boxTop = math.floor(ry - boxHeight * 0.5)
 					local boxW = math.floor(boxWidth)
@@ -1465,7 +1476,7 @@ pcall(function()
 	AutoLoadToggleBtn = createButton(settingsPage, getAutoLoadText(), 8)
 	DeleteSaveBtn = createButton(settingsPage, "Xóa Save theo tên", 9)
 	ResetBtn = createButton(settingsPage, "Reset về ban đầu", 10)
-	DebugLogBtn = createButton(settingsPage, "Debug Log: TẮT", 11)
+	DebugLogBtn = createButton(settingsPage, "Debug Log: BẬT", 11)
 
 	SaveStatusLabel = Instance.new("TextLabel")
 	SaveStatusLabel.Size = UDim2.new(1, 0, 0, 20)
@@ -1965,7 +1976,7 @@ RunService.RenderStepped:Connect(function(dt)
 			local currentDesc = CachedTarget and (CachedTarget.Parent.Name .. "." .. CachedTarget.Name) or "NONE"
 			if currentDesc ~= lastLoggedTargetName then
 				lastLoggedTargetName = currentDesc
-				logDebug(string.format("Target: %s | Dist: %.1f | Vel: %.1f", currentDesc, CachedDistance, CachedTargetVelocity.Magnitude))
+				logDebug(string.format("Target: %s | Dist: %.1f | Active: %s", currentDesc, CachedDistance, tostring(isSilentActive())))
 			end
 		end
 	end)
@@ -2001,7 +2012,7 @@ end
 
 local function logHookHit(tag)
 	if not Config.DebugLog then return end
-	if elapsedClock - lastHookLogTime >= 0.5 then
+	if elapsedClock - lastHookLogTime >= 0.4 then
 		lastHookLogTime = elapsedClock
 		logDebug("Hook kich hoat: " .. tag)
 	end
@@ -2112,11 +2123,13 @@ pcall(function()
 				if method == "Raycast" then
 					local origin, direction = ...
 					if isFiniteVector3(origin) and isFiniteVector3(direction) then
+						logHookHit("Workspace:Raycast")
 						return oldNamecall(self, origin, aimDirection(origin, direction, aimPoint), select(3, ...))
 					end
 				elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
 					local ray = ...
 					if typeof(ray) == "Ray" and isFiniteVector3(ray.Origin) and isFiniteVector3(ray.Direction) then
+						logHookHit("Workspace:" .. method)
 						return oldNamecall(self, Ray.new(ray.Origin, aimDirection(ray.Origin, ray.Direction, aimPoint)), select(2, ...))
 					end
 				end
@@ -2135,8 +2148,10 @@ pcall(function()
 				local aimPoint = getActiveSilentAimPoint()
 				if aimPoint then
 					if key == "Hit" then
+						logHookHit("Mouse.Hit")
 						return CFrame.new(aimPoint)
 					elseif key == "Target" then
+						logHookHit("Mouse.Target")
 						return CachedTarget
 					elseif key == "UnitRay" then
 						local cam = Workspace.CurrentCamera
@@ -2144,6 +2159,7 @@ pcall(function()
 							local origin = cam.CFrame.Position
 							local delta = aimPoint - origin
 							if isFiniteVector3(delta) and delta.Magnitude > 1e-4 then
+								logHookHit("Mouse.UnitRay")
 								return Ray.new(origin, delta.Unit)
 							end
 						end
