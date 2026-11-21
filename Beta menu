@@ -9,7 +9,6 @@ local Workspace = game:GetService("Workspace")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local Lighting = game:GetService("Lighting")
-local VirtualInputManager = pcall(function() return game:GetService("VirtualInputManager") end) and game:GetService("VirtualInputManager") or nil
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -24,7 +23,6 @@ local AIM_TARGET_MODES = { "Player + NPC", "Player", "NPC" }
 local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Random" }
 local HEADSHOT_CHANCE_PRESETS = { 25, 50, 75, 100 }
 local STICKINESS_PRESETS = { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }
-local ESP_DIST_PRESETS = { 150, 250, 350, 500, 1000, 1500 }
 local TABS = { "Silent Aim", "Aimbot", "ESP", "Settings" }
 
 local SAVE_FOLDER = "SilentAimGeminiSaves"
@@ -520,7 +518,7 @@ local function updateFOVVisual()
 		FOVLabel.Text = "FOV Silent: " .. tostring(Config.FOVRadius)
 	end
 	if AimbotFOVFrame then
-		local clampedAimFOV = math.clamp(Config.AimbotFOVRadius, 10, 120)
+		local clampedAimFOV = math.clamp(tonumber(Config.AimbotFOVRadius) or 60, 10, 120)
 		Config.AimbotFOVRadius = clampedAimFOV
 		AimbotFOVFrame.Size = UDim2.new(0, clampedAimFOV * 2, 0, clampedAimFOV * 2)
 		AimbotFOVFrame.Visible = active and Config.ShowAimbotFOV and usesChestAimbot()
@@ -529,7 +527,7 @@ local function updateFOVVisual()
 		AimbotFOVLabel.Text = "FOV Aimbot: " .. tostring(Config.AimbotFOVRadius)
 	end
 	if TriggerFOVFrame then
-		local clampedTrigFOV = math.clamp(Config.TriggerFOVRadius, 1, 10)
+		local clampedTrigFOV = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
 		Config.TriggerFOVRadius = clampedTrigFOV
 		TriggerFOVFrame.Size = UDim2.new(0, clampedTrigFOV * 2, 0, clampedTrigFOV * 2)
 		TriggerFOVFrame.Visible = (not pausedByVehicle) and Config.TriggerBot and Config.ShowTriggerFOV
@@ -720,7 +718,11 @@ end
 
 local function mountGui(gui)
 	local mounted = false
-	if type(gethui) == "function" then
+	local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
+	if playerGui then
+		mounted = pcall(function() gui.Parent = playerGui end)
+	end
+	if not mounted and type(gethui) == "function" then
 		local ok, hui = pcall(gethui)
 		if ok and hui then
 			mounted = pcall(function() gui.Parent = hui end)
@@ -730,12 +732,6 @@ local function mountGui(gui)
 		local okCore, core = pcall(function() return game:GetService("CoreGui") end)
 		if okCore and core then
 			mounted = pcall(function() gui.Parent = core end)
-		end
-	end
-	if not mounted then
-		local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
-		if playerGui then
-			mounted = pcall(function() gui.Parent = playerGui end)
 		end
 	end
 	return mounted
@@ -884,13 +880,213 @@ local function getHealthColor(ratio)
 	end
 end
 
+local function isGhostOrNonSolidPart(inst)
+	if not inst or not inst:IsA("BasePart") then return false end
+	local model = inst:FindFirstAncestorOfClass("Model")
+	if model and model:FindFirstChildOfClass("Humanoid") then
+		return false
+	end
+	if inst.Transparency >= 0.92 then
+		return true
+	end
+	if inst.CanCollide == false and inst.CanQuery == false then
+		return true
+	end
+	return false
+end
+
+local function checkWallOcclusion(model, targetPart, aimPos, hum)
+	local bypassWall = isTargetOnVehicleOrMovingPlatform(model, targetPart, hum)
+	if bypassWall then return false, true end
+
+	local cam = Workspace.CurrentCamera
+	if not cam or not isFiniteVector3(cam.CFrame.Position) then return false, false end
+
+	local origin = cam.CFrame.Position
+	local goalPos = (aimPos and isFiniteVector3(aimPos)) and aimPos or targetPart.Position
+	local direction = goalPos - origin
+	if not isFiniteVector3(direction) or direction.Magnitude <= 0.001 then return false, false end
+
+	SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
+	local ok, result = pcall(function()
+		return Workspace:Raycast(origin, direction, SharedWallParams)
+	end)
+	if not ok or not result or not result.Instance then return false, false end
+	if isGhostOrNonSolidPart(result.Instance) then return false, false end
+	return true, false
+end
+
+local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
+	if not wallFlag then return true end
+	local isBlocked, bypassWall = checkWallOcclusion(model, targetPart, aimPos, hum)
+	if bypassWall then return true end
+	return not isBlocked
+end
+
+local function rebuildPlayerCharacterSet()
+	table.clear(PlayerCharacterSet)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player.Character then
+			PlayerCharacterSet[player.Character] = true
+		end
+	end
+end
+
+local function isEnemyPlayer(player)
+	if player == LocalPlayer then return false end
+	if Config.TeamCheck and LocalPlayer.Team and player.Team == LocalPlayer.Team then return false end
+	local char = player.Character
+	if not char or not char.Parent or char == LocalPlayer.Character then return false end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	return hum ~= nil and hum.Health > 0
+end
+
+local function updateESPVisuals(cam, originPos)
+	if not ESPContainer or not cam or not isFiniteVector3(cam.CFrame.Position) then
+		hideUnusedEspEntries(1)
+		return
+	end
+	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance) then
+		hideUnusedEspEntries(1)
+		return
+	end
+
+	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	local vp = cam.ViewportSize
+	if vp.X <= 0 or vp.Y <= 0 then
+		hideUnusedEspEntries(1)
+		return
+	end
+
+	local candidates = {}
+	if shouldTargetPlayers() or shouldTargetNpcs() then
+		rebuildPlayerCharacterSet()
+	end
+
+	if shouldTargetPlayers() then
+		for _, player in ipairs(Players:GetPlayers()) do
+			if isEnemyPlayer(player) then
+				local char = player.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if char and hum and hum.Health > 0 then
+					table.insert(candidates, { model = char, hum = hum })
+				end
+			end
+		end
+	end
+
+	if shouldTargetNpcs() then
+		for _, entry in ipairs(CachedNpcEntries) do
+			local npcModel = entry.model
+			local hum = entry.hum
+			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
+				table.insert(candidates, { model = npcModel, hum = hum })
+			end
+		end
+	end
+
+	local visualIndex = 0
+	for _, item in ipairs(candidates) do
+		local model = item.model
+		local hum = item.hum
+		local hrp = model:FindFirstChild("HumanoidRootPart")
+		local head = model:FindFirstChild("Head")
+		local anchor = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
+
+		if anchor and isFiniteVector3(anchor.Position) then
+			local distStuds = (anchor.Position - originPos).Magnitude
+			local distMeters = math.floor(distStuds * 0.28 + 0.5)
+			local effectiveDist = math.max(distStuds, distMeters)
+
+			if effectiveDist <= maxEspDist then
+				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
+					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
+					or (anchor.Position + Vector3.new(0, 2.8, 0))
+				local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
+
+				local topScreen, topOnScreen = cam:WorldToViewportPoint(topWorld)
+				local botScreen, botOnScreen = cam:WorldToViewportPoint(bottomWorld)
+
+				if (topOnScreen or botOnScreen)
+					and isFiniteNumber(topScreen.Z) and isFiniteNumber(botScreen.Z)
+					and (topScreen.Z > 0 or botScreen.Z > 0)
+					and isFiniteNumber(topScreen.X) and isFiniteNumber(topScreen.Y)
+					and isFiniteNumber(botScreen.X) and isFiniteNumber(botScreen.Y) then
+
+					local boxHeight = math.clamp(math.abs(botScreen.Y - topScreen.Y), 14, vp.Y * 0.9)
+					local boxWidth = math.clamp(boxHeight * 0.56, 10, vp.X * 0.6)
+					local centerX = (topScreen.X + botScreen.X) * 0.5
+					local minY = math.min(topScreen.Y, botScreen.Y)
+					local boxLeft = math.floor(centerX - boxWidth * 0.5)
+					local boxTop = math.floor(minY)
+					local boxW = math.floor(boxWidth)
+					local boxH = math.floor(boxHeight)
+
+					visualIndex = visualIndex + 1
+					local entry = getOrCreateEspEntry(visualIndex)
+					if entry then
+						local isBlocked = false
+						if Config.ESPWallCheck then
+							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
+							isBlocked = blockedFlag
+						end
+						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
+
+						if entry.box then
+							if Config.ESPBox then
+								entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
+								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
+								if entry.stroke then
+									entry.stroke.Color = boxColor
+								end
+								entry.box.Visible = true
+							else
+								entry.box.Visible = false
+							end
+						end
+
+						if entry.hpBg and entry.hpFill then
+							if Config.ESPHealthBar then
+								local maxHp = math.max(1, tonumber(hum.MaxHealth) or 100)
+								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
+								local barW = 4
+								local barLeft = boxLeft - barW - 3
+								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
+								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
+								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
+								entry.hpFill.Position = UDim2.new(0, 0, 1 - hpRatio, 0)
+								entry.hpFill.BackgroundColor3 = getHealthColor(hpRatio)
+								entry.hpBg.Visible = true
+							else
+								entry.hpBg.Visible = false
+							end
+						end
+
+						if entry.dist then
+							if Config.ESPDistance then
+								entry.dist.Text = tostring(distMeters) .. "m"
+								entry.dist.Position = UDim2.new(0, boxLeft, 0, boxTop + boxH + 2)
+								entry.dist.Size = UDim2.new(0, boxW, 0, 14)
+								entry.dist.Visible = true
+							else
+								entry.dist.Visible = false
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	hideUnusedEspEntries(visualIndex + 1)
+end
+
+-- TẠO GUI ĐỘC LẬP
 pcall(function()
 	ScreenGui = Instance.new("ScreenGui")
 	ScreenGui.Name = "SilentAimGeminiGUI"
 	ScreenGui.ResetOnSpawn = false
 	ScreenGui.IgnoreGuiInset = true
-	ScreenGui.DisplayOrder = 999999
-	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 	ESPContainer = Instance.new("Frame")
 	ESPContainer.Name = "ESPContainer"
@@ -1060,7 +1256,7 @@ pcall(function()
 	end)
 
 	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseButton1 then
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			dragging = false
 		end
 	end)
@@ -1628,15 +1824,6 @@ local function getOriginPosition(cam)
 	return Vector3.zero
 end
 
-local function rebuildPlayerCharacterSet()
-	table.clear(PlayerCharacterSet)
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player.Character then
-			PlayerCharacterSet[player.Character] = true
-		end
-	end
-end
-
 local function triggerAsyncNpcScan()
 	if isScanningNpc or not shouldTargetNpcs() then return end
 	isScanningNpc = true
@@ -1733,15 +1920,6 @@ local function isWithinMaxDistance(origin, part)
 	return dist <= Config.MaxDistance
 end
 
-local function isEnemyPlayer(player)
-	if player == LocalPlayer then return false end
-	if Config.TeamCheck and LocalPlayer.Team and player.Team == LocalPlayer.Team then return false end
-	local char = player.Character
-	if not char or not char.Parent or char == LocalPlayer.Character then return false end
-	local hum = char:FindFirstChildOfClass("Humanoid")
-	return hum ~= nil and hum.Health > 0
-end
-
 local function resolveEnemyModelFromInstance(hitInst)
 	if not hitInst then return nil, nil end
 	local model = hitInst:FindFirstAncestorOfClass("Model")
@@ -1762,21 +1940,6 @@ local function resolveEnemyModelFromInstance(hitInst)
 		return model, hum
 	end
 	return nil, nil
-end
-
-local function isGhostOrNonSolidPart(inst)
-	if not inst or not inst:IsA("BasePart") then return false end
-	local model = inst:FindFirstAncestorOfClass("Model")
-	if model and model:FindFirstChildOfClass("Humanoid") then
-		return false
-	end
-	if inst.Transparency >= 0.92 then
-		return true
-	end
-	if inst.CanCollide == false and inst.CanQuery == false then
-		return true
-	end
-	return false
 end
 
 local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
@@ -1970,174 +2133,6 @@ local function pulseTriggerFire()
 	isTriggerBurstBusy = false
 end
 
-local function checkWallOcclusion(model, targetPart, aimPos, hum)
-	local bypassWall = isTargetOnVehicleOrMovingPlatform(model, targetPart, hum)
-	if bypassWall then return false, true end
-
-	local cam = Workspace.CurrentCamera
-	if not cam or not isFiniteVector3(cam.CFrame.Position) then return false, false end
-
-	local origin = cam.CFrame.Position
-	local goalPos = (aimPos and isFiniteVector3(aimPos)) and aimPos or targetPart.Position
-	local direction = goalPos - origin
-	if not isFiniteVector3(direction) or direction.Magnitude <= 0.001 then return false, false end
-
-	SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
-	local ok, result = pcall(function()
-		return Workspace:Raycast(origin, direction, SharedWallParams)
-	end)
-	if not ok or not result or not result.Instance then return false, false end
-	if isGhostOrNonSolidPart(result.Instance) then return false, false end
-	return true, false
-end
-
-local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
-	if not wallFlag then return true end
-	local isBlocked, bypassWall = checkWallOcclusion(model, targetPart, aimPos, hum)
-	if bypassWall then return true end
-	return not isBlocked
-end
-
-local function updateESPVisuals(cam, originPos)
-	if not ESPContainer or not cam or not isFiniteVector3(cam.CFrame.Position) then
-		hideUnusedEspEntries(1)
-		return
-	end
-	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance) then
-		hideUnusedEspEntries(1)
-		return
-	end
-
-	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
-	local vp = cam.ViewportSize
-	if vp.X <= 0 or vp.Y <= 0 then
-		hideUnusedEspEntries(1)
-		return
-	end
-
-	local candidates = {}
-	if shouldTargetPlayers() or shouldTargetNpcs() then
-		rebuildPlayerCharacterSet()
-	end
-
-	if shouldTargetPlayers() then
-		for _, player in ipairs(Players:GetPlayers()) do
-			if isEnemyPlayer(player) then
-				local char = player.Character
-				local hum = char and char:FindFirstChildOfClass("Humanoid")
-				if char and hum and hum.Health > 0 then
-					table.insert(candidates, { model = char, hum = hum })
-				end
-			end
-		end
-	end
-
-	if shouldTargetNpcs() then
-		for _, entry in ipairs(CachedNpcEntries) do
-			local npcModel = entry.model
-			local hum = entry.hum
-			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
-				table.insert(candidates, { model = npcModel, hum = hum })
-			end
-		end
-	end
-
-	local visualIndex = 0
-	for _, item in ipairs(candidates) do
-		local model = item.model
-		local hum = item.hum
-		local hrp = model:FindFirstChild("HumanoidRootPart")
-		local head = model:FindFirstChild("Head")
-		local anchor = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
-
-		if anchor and isFiniteVector3(anchor.Position) then
-			local distStuds = (anchor.Position - originPos).Magnitude
-			local distMeters = math.floor(distStuds * 0.28 + 0.5)
-			local effectiveDist = math.max(distStuds, distMeters)
-
-			if effectiveDist <= maxEspDist then
-				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
-					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
-					or (anchor.Position + Vector3.new(0, 2.8, 0))
-				local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
-
-				local topScreen, topOnScreen = cam:WorldToViewportPoint(topWorld)
-				local botScreen, botOnScreen = cam:WorldToViewportPoint(bottomWorld)
-
-				if (topOnScreen or botOnScreen)
-					and isFiniteNumber(topScreen.Z) and isFiniteNumber(botScreen.Z)
-					and (topScreen.Z > 0 or botScreen.Z > 0)
-					and isFiniteNumber(topScreen.X) and isFiniteNumber(topScreen.Y)
-					and isFiniteNumber(botScreen.X) and isFiniteNumber(botScreen.Y) then
-
-					local boxHeight = math.clamp(math.abs(botScreen.Y - topScreen.Y), 14, vp.Y * 0.9)
-					local boxWidth = math.clamp(boxHeight * 0.56, 10, vp.X * 0.6)
-					local centerX = (topScreen.X + botScreen.X) * 0.5
-					local minY = math.min(topScreen.Y, botScreen.Y)
-					local boxLeft = math.floor(centerX - boxWidth * 0.5)
-					local boxTop = math.floor(minY)
-					local boxW = math.floor(boxWidth)
-					local boxH = math.floor(boxHeight)
-
-					visualIndex = visualIndex + 1
-					local entry = getOrCreateEspEntry(visualIndex)
-					if entry then
-						local isBlocked = false
-						if Config.ESPWallCheck then
-							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
-							isBlocked = blockedFlag
-						end
-						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
-
-						if entry.box then
-							if Config.ESPBox then
-								entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
-								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
-								if entry.stroke then
-									entry.stroke.Color = boxColor
-								end
-								entry.box.Visible = true
-							else
-								entry.box.Visible = false
-							end
-						end
-
-						if entry.hpBg and entry.hpFill then
-							if Config.ESPHealthBar then
-								local maxHp = math.max(1, tonumber(hum.MaxHealth) or 100)
-								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
-								local barW = 4
-								local barLeft = boxLeft - barW - 3
-								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
-								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
-								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
-								entry.hpFill.Position = UDim2.new(0, 0, 1 - hpRatio, 0)
-								entry.hpFill.BackgroundColor3 = getHealthColor(hpRatio)
-								entry.hpBg.Visible = true
-							else
-								entry.hpBg.Visible = false
-							end
-						end
-
-						if entry.dist then
-							if Config.ESPDistance then
-								entry.dist.Text = tostring(distMeters) .. "m"
-								entry.dist.Position = UDim2.new(0, boxLeft, 0, boxTop + boxH + 2)
-								entry.dist.Size = UDim2.new(0, boxW, 0, 14)
-								entry.dist.Visible = true
-							else
-								entry.dist.Visible = false
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	hideUnusedEspEntries(visualIndex + 1)
-end
-
 local function isWithinSafeServerAngle(cam, worldPos)
 	if not Config.SafeAngleClamp or not cam then return true end
 	local lookDir = cam.CFrame.LookVector
@@ -2262,7 +2257,8 @@ end
 RunService.RenderStepped:Connect(function(dt)
 	local safeDt = isFiniteNumber(dt) and dt or 0.016
 	elapsedClock = elapsedClock + safeDt
-	updateRainbowUI()
+
+	pcall(updateRainbowUI)
 
 	pcall(function()
 		if Config.FarRender and (elapsedClock - lastFarRenderSyncTime >= 1.5) then
