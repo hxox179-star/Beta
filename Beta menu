@@ -188,7 +188,6 @@ local function applyFarRenderState(enabled)
 	captureOriginalRenderState()
 	if enabled then
 		pcall(function()
-			-- Mở tối đa bán kính streaming & tắt streaming nếu executor/game cho phép để hiện địch ở xa
 			Workspace.StreamingMinRadius = math.max(OriginalRenderState.StreamingMinRadius or 64, 2048)
 			Workspace.StreamingTargetRadius = math.max(OriginalRenderState.StreamingTargetRadius or 256, 4096)
 			Workspace.StreamingMaxRadius = math.max(OriginalRenderState.StreamingMaxRadius or 1024, 100000)
@@ -1578,26 +1577,20 @@ end
 
 local function pulseTriggerFire()
 	if isTriggerBurstBusy then return end
-	if elapsedClock - lastTriggerFireTime < 0.09 then return end
+	if elapsedClock - lastTriggerFireTime < 0.15 then return end
+
 	lastTriggerFireTime = elapsedClock
 	isTriggerBurstBusy = true
 
 	task.spawn(function()
-		local usedExecutorMouse = false
-		if type(mouse1press) == "function" and type(mouse1release) == "function" then
-			usedExecutorMouse = true
-			pcall(mouse1press)
-			task.wait(0.035)
-			pcall(mouse1release)
-		end
-
-		if not usedExecutorMouse then
+		pcall(function()
 			local char = LocalPlayer.Character
 			local tool = char and char:FindFirstChildOfClass("Tool")
 			if tool and type(tool.Activate) == "function" then
-				pcall(function() tool:Activate() end)
+				tool:Activate()
 			end
-		end
+		end)
+		task.wait(0.03)
 		isTriggerBurstBusy = false
 	end)
 end
