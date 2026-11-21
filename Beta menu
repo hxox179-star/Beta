@@ -36,7 +36,7 @@ local function getDefaultConfig()
 		AimMode = "Player + NPC",
 		TeamCheck = false,
 		WallCheck = false,
-		FOVRadius = 60,
+		FOVRadius = 180,
 		ShowFOV = false,
 		TriggerFOVRadius = 6,
 		ShowTriggerFOV = true,
@@ -56,7 +56,7 @@ local function getDefaultConfig()
 		ESPBox = true,
 		ESPHealthBar = true,
 		ESPDistance = true,
-		ESPWallCheck = true,
+		ESPWallCheck = false,
 		ESPMaxDistance = 1000,
 		AutoLoadEnabled = false,
 		SaveName = "Default",
@@ -1012,35 +1012,26 @@ local function updateESPVisuals(cam, originPos)
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
 			if distStuds <= math.max(maxEspDist, 1000) or distMeters <= maxEspDist then
-				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
-					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.5, 0))
-					or (anchor.Position + Vector3.new(0, 3.0, 0))
-				local bottomWorld = anchor.Position - Vector3.new(0, 3.2, 0)
+				local centerScreen, onScreen = cam:WorldToViewportPoint(anchor.Position)
+				local sx, sy, sz = centerScreen.X, centerScreen.Y, centerScreen.Z
 
-				local topScreen = cam:WorldToViewportPoint(topWorld)
-				local botScreen = cam:WorldToViewportPoint(bottomWorld)
+				if onScreen and isFiniteNumber(sx) and isFiniteNumber(sy) and isFiniteNumber(sz) and sz > 0.1 then
+					local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
+						and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.55, 0))
+						or (anchor.Position + Vector3.new(0, 3.0, 0))
+					local bottomWorld = anchor.Position - Vector3.new(0, 3.2, 0)
 
-				local topX, topY, topZ = topScreen.X, topScreen.Y, topScreen.Z
-				local botX, botY, botZ = botScreen.X, botScreen.Y, botScreen.Z
+					local topScreen = cam:WorldToViewportPoint(topWorld)
+					local botScreen = cam:WorldToViewportPoint(bottomWorld)
 
-				if isFiniteNumber(topX) and isFiniteNumber(topY) and isFiniteNumber(topZ)
-					and isFiniteNumber(botX) and isFiniteNumber(botY) and isFiniteNumber(botZ)
-					and (topZ > 0 or botZ > 0) then
+					local topY = (topScreen.Z > 0.1 and isFiniteNumber(topScreen.Y)) and topScreen.Y or (sy - (1200 / sz))
+					local botY = (botScreen.Z > 0.1 and isFiniteNumber(botScreen.Y)) and botScreen.Y or (sy + (1200 / sz))
 
-					if topZ < 0 then
-						topY = math.clamp(vp.Y - topY, 0, vp.Y)
-						topX = math.clamp(vp.X - topX, 0, vp.X)
-					end
-					if botZ < 0 then
-						botY = math.clamp(vp.Y - botY, 0, vp.Y)
-						botX = math.clamp(vp.X - botX, 0, vp.X)
-					end
-
-					local boxHeight = math.clamp(math.abs(botY - topY), 18, vp.Y * 0.9)
-					local boxWidth = math.clamp(boxHeight * 0.56, 14, vp.X * 0.6)
-					local centerX = (topX + botX) * 0.5
+					local boxHeight = math.clamp(math.abs(botY - topY), 18, vp.Y * 0.85)
+					local boxWidth = math.clamp(boxHeight * 0.56, 14, vp.X * 0.55)
 					local minY = math.min(topY, botY)
-					local boxLeft = math.floor(centerX - boxWidth * 0.5)
+
+					local boxLeft = math.floor(sx - boxWidth * 0.5)
 					local boxTop = math.floor(minY)
 					local boxW = math.floor(boxWidth)
 					local boxH = math.floor(boxHeight)
@@ -1724,7 +1715,7 @@ pcall(function()
 		updateFOVVisual()
 	end)
 	FOVPlus.MouseButton1Click:Connect(function()
-		Config.FOVRadius = math.min(450, Config.FOVRadius + 15)
+		Config.FOVRadius = math.min(600, Config.FOVRadius + 15)
 		updateFOVVisual()
 	end)
 
@@ -2025,7 +2016,8 @@ local function evaluateCandidateModel(model, hum, cam, originPos, centerX, cente
 		local dx = screenPos.X - centerX
 		local dy = screenPos.Y - centerY
 		local dist = math.sqrt(dx * dx + dy * dy)
-		if dist <= math.min(shortestDistance, fovLimit) and isClearPathWithWallFlag(model, part, part.Position, hum, wallFlag) then
+		local effectiveFov = math.max(tonumber(fovLimit) or 180, 180)
+		if dist <= math.min(shortestDistance, effectiveFov) and isClearPathWithWallFlag(model, part, part.Position, hum, wallFlag) then
 			return part, dist
 		end
 	end
@@ -2041,7 +2033,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	local centerY = vp.Y * 0.5
 	local originPos = getOriginPosition(cam)
 	local closestPart = nil
-	local shortestDistance = fovLimit
+	local shortestDistance = math.max(tonumber(fovLimit) or 180, 180)
 
 	local checkPlayers = shouldTargetPlayers()
 	local checkNpcs = shouldTargetNpcs()
