@@ -971,36 +971,14 @@ local function updateESPVisuals(cam, originPos)
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
 			if distStuds <= maxEspDist or distMeters <= maxEspDist then
-				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
-					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
-					or (anchor.Position + Vector3.new(0, 2.8, 0))
-				local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
+				local anchorScreen, onAnchor = cam:WorldToViewportPoint(anchor.Position)
+				local rx, ry, rz = anchorScreen.X, anchorScreen.Y, anchorScreen.Z
 
-				local topScreen = cam:WorldToViewportPoint(topWorld)
-				local botScreen = cam:WorldToViewportPoint(bottomWorld)
-
-				local topX, topY, topZ = topScreen.X, topScreen.Y, topScreen.Z
-				local botX, botY, botZ = botScreen.X, botScreen.Y, botScreen.Z
-
-				if isFiniteNumber(topX) and isFiniteNumber(topY) and isFiniteNumber(topZ)
-					and isFiniteNumber(botX) and isFiniteNumber(botY) and isFiniteNumber(botZ)
-					and (topZ > 0 or botZ > 0) then
-
-					if topZ <= 0 then
-						topY = math.clamp(vp.Y - topY, 0, vp.Y)
-						topX = math.clamp(vp.X - topX, 0, vp.X)
-					end
-					if botZ <= 0 then
-						botY = math.clamp(vp.Y - botY, 0, vp.Y)
-						botX = math.clamp(vp.X - botX, 0, vp.X)
-					end
-
-					local boxHeight = math.clamp(math.abs(botY - topY), 16, vp.Y * 0.9)
-					local boxWidth = math.clamp(boxHeight * 0.56, 12, vp.X * 0.6)
-					local centerX = (topX + botX) * 0.5
-					local minY = math.min(topY, botY)
-					local boxLeft = math.floor(centerX - boxWidth * 0.5)
-					local boxTop = math.floor(minY)
+				if onAnchor and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.25 then
+					local boxHeight = math.clamp(1050 / math.max(rz, 1.5), 10, vp.Y * 0.62)
+					local boxWidth = math.clamp(boxHeight * 0.54, 8, vp.X * 0.35)
+					local boxLeft = math.floor(rx - boxWidth * 0.5)
+					local boxTop = math.floor(ry - boxHeight * 0.5)
 					local boxW = math.floor(boxWidth)
 					local boxH = math.floor(boxHeight)
 
@@ -2168,6 +2146,10 @@ end)
 
 local function getActiveSilentAimPoint()
 	if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
+		local targetHum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
+		if not targetHum or targetHum.Health <= 0 then
+			return nil
+		end
 		if CachedAimPos and isFiniteVector3(CachedAimPos) then
 			return CachedAimPos
 		end
