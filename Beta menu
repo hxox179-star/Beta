@@ -1865,7 +1865,48 @@ local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
 	return not isBlocked
 end
 
--- CƠ CHẾ AUTO BẮN LẤY TỪ BẢN TRƯỚC (FOV TỰ BẮN + KÍCH HOẠT TOOL/EVENT)
+-- CƠ CHẾ AUTO BẮN TỐI ƯU: QUÉT TRỰC TIẾP MODEL TRONG FOV TỰ BẮN + KÍCH HOẠT TOOL/INPUT/EVENT
+local function isModelInTriggerFOV(model, hum, cam, originPos, centerX, centerY, radius)
+	if not model or not hum or hum.Health <= 0 then return false end
+	local checkParts = {
+		model:FindFirstChild("Head"),
+		model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso"),
+		model:FindFirstChild("HumanoidRootPart")
+	}
+	for _, p in ipairs(checkParts) do
+		if p and p:IsA("BasePart") and isFiniteVector3(p.Position) and isWithinMaxDistance(originPos, p) then
+			local worldPt = p.Position
+			if CachedTarget == p and CachedAimPos and isFiniteVector3(CachedAimPos) then
+				worldPt = CachedAimPos
+			end
+			local screenPos, onScreen = cam:WorldToViewportPoint(worldPt)
+			if onScreen and isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
+				local dx = screenPos.X - centerX
+				local dy = screenPos.Y - centerY
+				if math.sqrt(dx * dx + dy * dy) <= radius then
+					if not Config.TriggerBotWallCheck then
+						return true
+					end
+					if isTargetOnVehicleOrMovingPlatform(model, p, hum) then
+						return true
+					end
+					local rayDelta = worldPt - cam.CFrame.Position
+					if rayDelta.Magnitude > 0.01 then
+						SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
+						local okWall, wallHit = pcall(function()
+							return Workspace:Raycast(cam.CFrame.Position, rayDelta, SharedWallParams)
+						end)
+						if okWall and (wallHit == nil or isGhostOrNonSolidPart(wallHit.Instance)) then
+							return true
+						end
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
 local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
 	if not cam then return false end
 	local vp = cam.ViewportSize
@@ -1877,57 +1918,35 @@ local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
 		rebuildPlayerCharacterSet()
 	end
 
-	local function checkModelInRadius(model, hum)
-		if not model or not hum or hum.Health <= 0 then return false end
-		local checkParts = {
-			model:FindFirstChild("Head"),
-			model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso"),
-			model:FindFirstChild("HumanoidRootPart")
-		}
-		for _, p in ipairs(checkParts) do
-			if p and p:IsA("BasePart") and isFiniteVector3(p.Position) and isWithinMaxDistance(originPos, p) then
-				local screenPos, onScreen = cam:WorldToViewportPoint(p.Position)
-				if onScreen and isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
-					local dx = screenPos.X - centerX
-					local dy = screenPos.Y - centerY
-					if math.sqrt(dx * dx + dy * dy) <= radius then
-						if not Config.TriggerBotWallCheck then
-							return true
-						end
-						if isTargetOnVehicleOrMovingPlatform(model, p, hum) then
-							return true
-						end
-						local rayDelta = p.Position - cam.CFrame.Position
-						if rayDelta.Magnitude > 0.01 then
-							SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
-							local okWall, wallHit = pcall(function()
-								return Workspace:Raycast(cam.CFrame.Position, rayDelta, SharedWallParams)
-							end)
-							if okWall and (wallHit == nil or isGhostOrNonSolidPart(wallHit.Instance)) then
-								return true
-							end
-						end
-					end
-				end
-			end
-		end
-		return false
-	end
-
 	if shouldTargetPlayers() then
 		for _, player in ipairs(Players:GetPlayers()) do
-			if isEnemyPlayer(player) and checkModelInRadius(player.Character, player.Character:FindFirstChildOfClass("Humanoid")) then
-				return true
+			if isEnemyPlayer(player) then
+				local char = player.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if hum and isModelInTriggerFOV(char, hum, cam, originPos, centerX, centerY, radius) then
+					return true
+				end
 			end
 		end
 	end
 
 	if shouldTargetNpcs() then
+		local checkedModels = {}
 		for _, entry in ipairs(CachedNpcEntries) do
 			local npcModel = entry.model
 			local hum = entry.hum
 			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
-				if checkModelInRadius(npcModel, hum) then
+				checkedModels[npcModel] = true
+				if isModelInTriggerFOV(npcModel, hum, cam, originPos, centerX, centerY, radius) then
+					return true
+				end
+			end
+		end
+		-- Dự phòng quét trực tiếp trong Workspace nếu cache NPC chưa kịp nạp
+		for _, obj in ipairs(Workspace:GetChildren()) do
+			if obj:IsA("Model") and not checkedModels[obj] and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character then
+				local hum = obj:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 and isModelInTriggerFOV(obj, hum, cam, originPos, centerX, centerY, radius) then
 					return true
 				end
 			end
@@ -1961,7 +1980,7 @@ end
 
 local function pulseTriggerFire()
 	if isTriggerBurstBusy then return end
-	if elapsedClock - lastTriggerFireTime < 0.12 then return end
+	if elapsedClock - lastTriggerFireTime < 0.08 then return end
 
 	lastTriggerFireTime = elapsedClock
 	isTriggerBurstBusy = true
@@ -1973,6 +1992,22 @@ local function pulseTriggerFire()
 	end
 
 	fireToolEventsIfPresent(tool)
+
+	if VirtualInputManager then
+		local cam = Workspace.CurrentCamera
+		local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+		local clickX = math.floor(vp.X * 0.5)
+		local clickY = math.floor(vp.Y * 0.5)
+		pcall(function()
+			VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
+		end)
+		task.delay(0.03, function()
+			pcall(function()
+				VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
+			end)
+		end)
+	end
+
 	isTriggerBurstBusy = false
 end
 
