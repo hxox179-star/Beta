@@ -978,20 +978,9 @@ local function updateESPVisuals(cam, originPos)
 				local rootPt, onRoot = cam:WorldToViewportPoint(anchor.Position)
 				local rx, ry, rz = rootPt.X, rootPt.Y, rootPt.Z
 
-				if onRoot and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.05 then
-					local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
-						and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.55, 0))
-						or (anchor.Position + Vector3.new(0, 3.0, 0))
-					local botWorld = anchor.Position - Vector3.new(0, 3.0, 0)
-					local topPt = cam:WorldToViewportPoint(topWorld)
-					local botPt = cam:WorldToViewportPoint(botWorld)
-
-					local rawSpanY = (isFiniteNumber(topPt.Y) and isFiniteNumber(botPt.Y) and topPt.Z > 0 and botPt.Z > 0)
-						and math.abs(botPt.Y - topPt.Y)
-						or (1550 / math.max(rz, 1.0))
-
-					local boxHeight = math.clamp(rawSpanY * 1.12, 22, vp.Y * 0.92)
-					local boxWidth = math.clamp(boxHeight * 0.62, 16, vp.X * 0.55)
+				if onRoot and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.25 then
+					local boxHeight = math.clamp(1180 / math.max(rz, 1.5), 14, vp.Y * 0.68)
+					local boxWidth = math.clamp(boxHeight * 0.52, 10, vp.X * 0.35)
 					local boxLeft = math.floor(rx - boxWidth * 0.5)
 					local boxTop = math.floor(ry - boxHeight * 0.5)
 					local boxW = math.floor(boxWidth)
@@ -1996,20 +1985,6 @@ local function getActiveSilentAimPoint()
 	return nil
 end
 
-local function aimDirection(origin, originalDirection, targetPos)
-	if not (isFiniteVector3(origin) and isFiniteVector3(targetPos)) then return originalDirection end
-	local toTarget = targetPos - origin
-	if not isFiniteVector3(toTarget) or toTarget.Magnitude <= 1e-4 then
-		if isFiniteVector3(originalDirection) and originalDirection.Magnitude > 1e-4 then
-			return originalDirection
-		end
-		return Vector3.new(0, 0, -1)
-	end
-	local mag = (isFiniteVector3(originalDirection) and originalDirection.Magnitude > 0) and originalDirection.Magnitude or toTarget.Magnitude
-	local dir = toTarget.Unit * mag
-	return isFiniteVector3(dir) and dir or originalDirection
-end
-
 local function logHookHit(tag)
 	if not Config.DebugLog then return end
 	if elapsedClock - lastHookLogTime >= 0.4 then
@@ -2114,25 +2089,6 @@ pcall(function()
 			end
 			if (method == "FireServer" or method == "InvokeServer") and isSuspiciousClientRemote(self) and not isCallerOwnScript() then
 				return nil
-			end
-		end
-
-		if isSilentActive() and self == Workspace and CachedTarget and not isCallerOwnScript() then
-			local aimPoint = getActiveSilentAimPoint()
-			if aimPoint then
-				if method == "Raycast" then
-					local origin, direction = ...
-					if isFiniteVector3(origin) and isFiniteVector3(direction) then
-						logHookHit("Workspace:Raycast")
-						return oldNamecall(self, origin, aimDirection(origin, direction, aimPoint), select(3, ...))
-					end
-				elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
-					local ray = ...
-					if typeof(ray) == "Ray" and isFiniteVector3(ray.Origin) and isFiniteVector3(ray.Direction) then
-						logHookHit("Workspace:" .. method)
-						return oldNamecall(self, Ray.new(ray.Origin, aimDirection(ray.Origin, ray.Direction, aimPoint)), select(2, ...))
-					end
-				end
 			end
 		end
 		return oldNamecall(self, ...)
