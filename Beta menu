@@ -20,7 +20,7 @@ if not LocalPlayer then
 end
 
 local AIM_TARGET_MODES = { "Player + NPC", "Player", "NPC" }
-local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Random" }
+local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Head + Body", "Random" }
 local HEADSHOT_CHANCE_PRESETS = { 25, 50, 75, 100 }
 local TABS = { "Silent Aim", "ESP", "Settings" }
 
@@ -44,7 +44,7 @@ local function getDefaultConfig()
 		ShowFOV = false,
 		TriggerFOVRadius = 6,
 		ShowTriggerFOV = true,
-		TargetPart = "Head",
+		TargetPart = "Head + Body",
 		HeadshotChance = 50,
 		MaxDistance = 0,
 		AutoSmartAim = false,
@@ -61,7 +61,7 @@ local function getDefaultConfig()
 		ESPHealthBar = true,
 		ESPDistance = true,
 		ESPWallCheck = true,
-		ESPMaxDistance = 350,
+		ESPMaxDistance = 900,
 		AutoLoadEnabled = false,
 		SaveName = "Default",
 		DebugLog = false
@@ -114,12 +114,14 @@ local lastSeatCheckTime = 0
 local lastFarRenderSyncTime = 0
 local lastTriggerFireTime = 0
 local lastEspRenderTime = 0
+local lastBulletSweepTime = 0
 local isTriggerBurstBusy = false
 local elapsedClock = 0
 local isScanningNpc = false
 
 local CachedNpcEntries = {}
 local PlayerCharacterSet = {}
+local TrackedBullets = {}
 local prevTargetPart = nil
 local prevTargetPos = nil
 local prevTargetVel = nil
@@ -207,8 +209,8 @@ local function applyFarRenderState(enabled)
 	captureOriginalRenderState()
 	if enabled then
 		pcall(function()
-			Workspace.StreamingMinRadius = math.max(OriginalRenderState.StreamingMinRadius or 64, 2048)
-			Workspace.StreamingTargetRadius = math.max(OriginalRenderState.StreamingTargetRadius or 256, 4096)
+			Workspace.StreamingMinRadius = math.max(OriginalRenderState.StreamingMinRadius or 64, 4096)
+			Workspace.StreamingTargetRadius = math.max(OriginalRenderState.StreamingTargetRadius or 256, 8192)
 			Workspace.StreamingMaxRadius = math.max(OriginalRenderState.StreamingMaxRadius or 1024, 100000)
 			if Workspace.StreamingEnabled then
 				pcall(function()
@@ -352,7 +354,7 @@ local function applyConfigTable(tbl)
 			Config[k] = tbl[k]
 		end
 	end
-	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 900, 150, 2500)
 	userDesiredEnabled = Config.Enabled
 end
 
@@ -476,7 +478,16 @@ local function getAutoSeatText() return Config.AutoSeatToggle and "Tự tắt kh
 local function getAntiKickText() return Config.AntiKickClient and "Siêu Antiban/Kick: BẬT" or "Siêu Antiban/Kick: TẮT" end
 local function getSafeAngleText() return Config.SafeAngleClamp and ("Lách góc Server (" .. tostring(Config.MaxSafeAngleDeg) .. "°): BẬT") or "Lách góc Server: TẮT" end
 local function getAimModeText() return "Aim Mode: " .. tostring(Config.AimMode) end
-local function getTargetPartText() return "Mục tiêu: " .. tostring(Config.TargetPart) end
+local function getTargetPartText()
+	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
+		return "Mục tiêu: Đầu + Ngực (Random)"
+	elseif Config.TargetPart == "HumanoidRootPart" then
+		return "Mục tiêu: Ngực (Body)"
+	elseif Config.TargetPart == "Head" then
+		return "Mục tiêu: Đầu (Head)"
+	end
+	return "Mục tiêu: " .. tostring(Config.TargetPart)
+end
 local function getHeadshotChanceText() return "Tỷ lệ HS (Random): " .. tostring(Config.HeadshotChance) .. "%" end
 local function getMaxDistText()
 	if Config.MaxDistance <= 0 then return "Tầm bắn: Không giới hạn" end
@@ -518,7 +529,7 @@ local function updateFOVVisual()
 		TriggerFOVLabel.Text = "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius)
 	end
 	if ESPDistLabel then
-		Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+		Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 900, 150, 2500)
 		ESPDistLabel.Text = getESPDistRangeText()
 	end
 end
@@ -660,29 +671,58 @@ local function isTargetOnVehicleOrMovingPlatform(model, part, hum)
 	return false
 end
 
+local function resolveHeadOrPart(model, preferredPart)
+	if not model then return preferredPart end
+	local head = model:FindFirstChild("Head")
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso") or model:FindFirstChild("HumanoidRootPart")
+	local validHead = (head and head:IsA("BasePart") and isFiniteVector3(head.Position)) and head or nil
+	local validBody = (torso and torso:IsA("BasePart") and isFiniteVector3(torso.Position)) and torso or nil
+
+	if Config.TargetPart == "Head" then
+		return validHead or preferredPart
+	end
+	if Config.TargetPart == "HumanoidRootPart" then
+		return validBody or preferredPart
+	end
+	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
+		if validHead and validBody then
+			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
+			return (math.random(1, 100) <= chance) and validHead or validBody
+		end
+		return validHead or validBody or preferredPart
+	end
+	if preferredPart and preferredPart:IsA("BasePart") and Config.AutoSmartAim and validHead then
+		return validHead
+	end
+	return preferredPart
+end
+
 local function pickModelTargetPart(model)
 	if not model then return nil end
 	local head = model:FindFirstChild("Head")
 	local hrp = model:FindFirstChild("HumanoidRootPart")
 	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+	local bodyPart = (torso and torso:IsA("BasePart") and torso) or (hrp and hrp:IsA("BasePart") and hrp) or nil
 
-	if Config.TargetPart == "Random" then
+	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
 		local hasHead = head and head:IsA("BasePart")
-		local fallbackBody = (hrp and hrp:IsA("BasePart") and hrp) or (torso and torso:IsA("BasePart") and torso) or nil
-		if hasHead and fallbackBody then
+		if hasHead and bodyPart then
 			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
-			return (math.random(1, 100) <= chance) and head or fallbackBody
+			return (math.random(1, 100) <= chance) and head or bodyPart
 		end
-		return (hasHead and head) or fallbackBody or nil
+		return (hasHead and head) or bodyPart or nil
+	end
+
+	if Config.TargetPart == "HumanoidRootPart" then
+		return bodyPart or (head and head:IsA("BasePart") and head) or nil
 	end
 
 	local chosen = model:FindFirstChild(Config.TargetPart)
 	if chosen and chosen:IsA("BasePart") then
 		return chosen
 	end
-	if hrp and hrp:IsA("BasePart") then return hrp end
-	if torso and torso:IsA("BasePart") then return torso end
-	return (head and head:IsA("BasePart")) and head or nil
+	if head and head:IsA("BasePart") then return head end
+	return bodyPart
 end
 
 local function mountGui(gui)
@@ -926,7 +966,7 @@ local function updateESPVisuals(cam, originPos)
 	end
 
 	ESPContainer.Visible = true
-	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 900, 150, 2500)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
 		hideUnusedEspEntries(1)
@@ -1245,7 +1285,7 @@ pcall(function()
 	end)
 
 	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseButton1 then
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			dragging = false
 		end
 	end)
@@ -1454,7 +1494,7 @@ pcall(function()
 	ESPDistBtn = createButton(espPage, getESPDistText(), 4)
 	ESPWallBtn = createButton(espPage, getESPWallText(), 5)
 	local ESPDistMinus, ESPDistPlus
-	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-150", "+150", Color3.fromRGB(140, 245, 175), 6)
+	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-250", "+250", Color3.fromRGB(140, 245, 175), 6)
 
 	-- TAB 3: SETTINGS
 	local settingsPage = PageFrames["Settings"]
@@ -1577,11 +1617,11 @@ pcall(function()
 		ESPWallBtn.BackgroundColor3 = Config.ESPWallCheck and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end)
 	ESPDistMinus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.max(150, (tonumber(Config.ESPMaxDistance) or 350) - 150)
+		Config.ESPMaxDistance = math.max(150, (tonumber(Config.ESPMaxDistance) or 900) - 250)
 		updateFOVVisual()
 	end)
 	ESPDistPlus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.min(1500, (tonumber(Config.ESPMaxDistance) or 350) + 150)
+		Config.ESPMaxDistance = math.min(2500, (tonumber(Config.ESPMaxDistance) or 900) + 250)
 		updateFOVVisual()
 	end)
 	AntiKickBtn.MouseButton1Click:Connect(function()
@@ -1610,7 +1650,7 @@ pcall(function()
 		updateFOVVisual()
 	end)
 	TargetPartBtn.MouseButton1Click:Connect(function()
-		Config.TargetPart = cyclePreset(TARGET_PART_MODES, Config.TargetPart, "Head")
+		Config.TargetPart = cyclePreset(TARGET_PART_MODES, Config.TargetPart, "Head + Body")
 		TargetPartBtn.Text = getTargetPartText()
 	end)
 	HeadshotChanceBtn.MouseButton1Click:Connect(function()
@@ -1618,9 +1658,9 @@ pcall(function()
 		HeadshotChanceBtn.Text = getHeadshotChanceText()
 	end)
 	MaxDistBtn.MouseButton1Click:Connect(function()
-		if Config.MaxDistance == 0 then Config.MaxDistance = 150
-		elseif Config.MaxDistance == 150 then Config.MaxDistance = 250
-		elseif Config.MaxDistance == 250 then Config.MaxDistance = 400
+		if Config.MaxDistance == 0 then Config.MaxDistance = 250
+		elseif Config.MaxDistance == 250 then Config.MaxDistance = 500
+		elseif Config.MaxDistance == 500 then Config.MaxDistance = 800
 		else Config.MaxDistance = 0 end
 		MaxDistBtn.Text = getMaxDistText()
 	end)
@@ -1778,6 +1818,107 @@ local function getOriginPosition(cam)
 	return Vector3.zero
 end
 
+local function isProjectileCandidate(inst)
+	if not inst or not inst:IsA("BasePart") then return false end
+	local myChar = LocalPlayer.Character
+	if myChar and inst:IsDescendantOf(myChar) then return false end
+	if PlayerCharacterSet[inst:FindFirstAncestorOfClass("Model")] then return false end
+	local lower = string.lower(inst.Name or "")
+	if string.find(lower, "bullet", 1, true)
+		or string.find(lower, "slug", 1, true)
+		or string.find(lower, "shell", 1, true)
+		or string.find(lower, "projectile", 1, true)
+		or string.find(lower, "tracer", 1, true)
+		or string.find(lower, "bolt", 1, true)
+		or string.find(lower, "dart", 1, true)
+		or string.find(lower, "round", 1, true) then
+		return true
+	end
+	return false
+end
+
+local function registerTrackedBullet(part)
+	if not isProjectileCandidate(part) then return end
+	if not isFiniteVector3(part.Position) then return end
+	local cam = Workspace.CurrentCamera
+	local origin = getOriginPosition(cam)
+	if (part.Position - origin).Magnitude > 140 then return end
+	for _, entry in ipairs(TrackedBullets) do
+		if entry.part == part then return end
+	end
+	table.insert(TrackedBullets, {
+		part = part,
+		createdAt = elapsedClock
+	})
+end
+
+local function steerActiveBulletsTowardTarget(targetPos)
+	if not isSilentActive() or not isFiniteVector3(targetPos) then return end
+	local cam = Workspace.CurrentCamera
+	local origin = getOriginPosition(cam)
+
+	for i = #TrackedBullets, 1, -1 do
+		local entry = TrackedBullets[i]
+		local part = entry.part
+		if not part or not part.Parent or not part:IsA("BasePart") or (elapsedClock - entry.createdAt) > 6 then
+			table.remove(TrackedBullets, i)
+		elseif isFiniteVector3(part.Position) then
+			local delta = targetPos - part.Position
+			local dist = delta.Magnitude
+			if dist > 0.35 and dist <= 4500 then
+				local dir = delta.Unit
+				local vel = part.AssemblyLinearVelocity
+				local speed = (isFiniteVector3(vel) and vel.Magnitude > 10) and vel.Magnitude or math.max(550, tonumber(Config.BulletSpeed) or 950)
+				if Config.StraightBullet then
+					speed = math.max(speed, 1600)
+				end
+				pcall(function()
+					part.CFrame = CFrame.lookAt(part.Position, targetPos)
+					if not part.Anchored then
+						part.AssemblyLinearVelocity = dir * speed
+					end
+					for _, child in ipairs(part:GetChildren()) do
+						if child:IsA("BodyVelocity") then
+							child.Velocity = dir * speed
+						elseif child:IsA("LinearVelocity") then
+							child.VectorVelocity = dir * speed
+						elseif child:IsA("BodyGyro") then
+							child.CFrame = CFrame.lookAt(part.Position, targetPos)
+						end
+					end
+				end)
+			elseif dist <= 0.35 then
+				pcall(function()
+					part.CFrame = CFrame.new(targetPos)
+				end)
+			end
+		end
+	end
+
+	if elapsedClock - lastBulletSweepTime >= 0.25 and (isCurrentlyFiring() or CachedTarget) then
+		lastBulletSweepTime = elapsedClock
+		pcall(function()
+			for _, obj in ipairs(Workspace:GetChildren()) do
+				if isProjectileCandidate(obj) and (obj.Position - origin).Magnitude <= 120 then
+					registerTrackedBullet(obj)
+				elseif obj:IsA("Folder") then
+					for _, child in ipairs(obj:GetChildren()) do
+						if isProjectileCandidate(child) and (child.Position - origin).Magnitude <= 120 then
+							registerTrackedBullet(child)
+						end
+					end
+				end
+			end
+		end)
+	end
+end
+
+Workspace.DescendantAdded:Connect(function(desc)
+	if desc and desc:IsA("BasePart") and isSilentActive() then
+		registerTrackedBullet(desc)
+	end
+end)
+
 local function triggerAsyncNpcScan()
 	if isScanningNpc or not shouldTargetNpcs() then return end
 	isScanningNpc = true
@@ -1820,7 +1961,7 @@ local function estimateTargetVelocity(part, dt, distance)
 
 	if prevTargetPart == part and prevTargetPos and prevSampleTime and dt > 0.001 then
 		local frameVel = (currentPos - prevTargetPos) / dt
-		if isFiniteVector3(frameVel) and frameVel.Magnitude < 160 then
+		if isFiniteVector3(frameVel) and frameVel.Magnitude < 220 then
 			local blend = 0.65
 			estimatedVel = (assemblyVel.Magnitude > 1 and frameVel.Magnitude > 1) and assemblyVel:Lerp(frameVel, blend) or frameVel
 		end
@@ -1863,12 +2004,12 @@ local function isWithinMaxDistance(origin, part)
 	local dist = (part.Position - origin).Magnitude
 	if Config.FarRender then
 		if Config.MaxDistance > 0 then
-			return dist <= math.max(Config.MaxDistance, 2500)
+			return dist <= math.max(Config.MaxDistance, 3000)
 		end
 		return dist <= 100000
 	end
 	if Config.MaxDistance <= 0 then
-		if Config.AutoSmartAim then return dist <= 10000 end
+		if Config.AutoSmartAim then return dist <= 100000 end
 		return true
 	end
 	return dist <= Config.MaxDistance
@@ -2120,6 +2261,21 @@ local function updateRainbowUI()
 	end
 end
 
+local function getActiveSilentAimPoint()
+	if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
+		local snapped = resolveHeadOrPart(CachedTarget.Parent, CachedTarget)
+		local anchorPos = (snapped and snapped:IsA("BasePart") and isFiniteVector3(snapped.Position)) and snapped.Position or CachedTarget.Position
+		if CachedAimPos and isFiniteVector3(CachedAimPos) then
+			local deltaFromAnchor = CachedAimPos - CachedTarget.Position
+			if isFiniteVector3(deltaFromAnchor) then
+				return anchorPos + deltaFromAnchor
+			end
+		end
+		return anchorPos
+	end
+	return nil
+end
+
 RunService.RenderStepped:Connect(function(dt)
 	local safeDt = isFiniteNumber(dt) and dt or 0.016
 	elapsedClock = elapsedClock + safeDt
@@ -2151,6 +2307,10 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
+			local snappedPart = resolveHeadOrPart(CachedTarget.Parent, CachedTarget)
+			if snappedPart and snappedPart:IsA("BasePart") and isFiniteVector3(snappedPart.Position) then
+				CachedTarget = snappedPart
+			end
 			local rawDist = (CachedTarget.Position - originPos).Magnitude
 			CachedTargetVelocity = estimateTargetVelocity(CachedTarget, safeDt, rawDist)
 			CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
@@ -2177,6 +2337,11 @@ RunService.RenderStepped:Connect(function(dt)
 			prevSampleTime = nil
 		end
 
+		local liveAimPt = getActiveSilentAimPoint()
+		if liveAimPt then
+			steerActiveBulletsTowardTarget(liveAimPt)
+		end
+
 		if Config.TriggerBot and not pausedByVehicle then
 			local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
 			if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
@@ -2193,16 +2358,6 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 	end)
 end)
-
-local function getActiveSilentAimPoint()
-	if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
-		if CachedAimPos and isFiniteVector3(CachedAimPos) then
-			return CachedAimPos
-		end
-		return CachedTarget.Position
-	end
-	return nil
-end
 
 local function aimDirection(origin, originalDirection, targetPos)
 	if not (isFiniteVector3(origin) and isFiniteVector3(targetPos)) then return originalDirection end
