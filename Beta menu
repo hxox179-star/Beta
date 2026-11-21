@@ -689,7 +689,6 @@ local function pickModelTargetPart(model)
 	local hrp = model:FindFirstChild("HumanoidRootPart")
 	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
 
-	-- Khi bật tầm bắn tự động 1 -> 1000m, ưu tiên bắn vào đầu (Head) đúng khoảng cách thực
 	if isAutoRangeEnabled() then
 		if head and head:IsA("BasePart") then return head end
 		if torso and torso:IsA("BasePart") then return torso end
@@ -2199,7 +2198,6 @@ local function scanCandidatesAtRange(cam, originPos, centerX, centerY, partPicke
 	return closestPart
 end
 
--- Các mốc dò tăng dần từ nhỏ đến lớn 1 -> 1000m (mượt mà, không rớt FPS)
 local AUTO_RANGE_STEPS = {
 	1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 65, 80, 100,
 	125, 150, 180, 220, 260, 300, 350, 400, 460, 520, 600, 700, 800, 900, 1000
@@ -2222,7 +2220,6 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 		triggerAsyncNpcScan()
 	end
 
-	-- Quét tăng dần từng nấc 1 -> 1000m vào đầu, luôn bật kiểm tra đường ngắm để không trúng dame ảo
 	if isAutoRangeEnabled() then
 		for _, stepMeters in ipairs(AUTO_RANGE_STEPS) do
 			local hitPart = scanCandidatesAtRange(cam, originPos, centerX, centerY, partPicker, fovLimit, true, stepMeters)
@@ -2287,7 +2284,6 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if isSilentActive() then
-			-- Khi bật dò tự động 1 -> 1000m, dò mỗi ~0.04s để vừa bám đầu chuẩn vừa giữ khung hình mượt
 			local scanInterval = isAutoRangeEnabled() and 0.04 or 0.016
 			if (elapsedClock - lastAimScanTime >= scanInterval) or not CachedTarget or not CachedTarget.Parent then
 				lastAimScanTime = elapsedClock
