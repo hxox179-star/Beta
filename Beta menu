@@ -1,5 +1,5 @@
 -- ============================================================================
--- SILENT AIM GEMINI - SILENT AIM + ESP + AUTO FIRE (SAFE UI, SAVE/LOAD)
+-- SILENT AIM GEMINI - SILENT AIM + ESP + FIXED AUTO FIRE (SAFE UI, SAVE/LOAD)
 -- ============================================================================
 
 local Players = game:GetService("Players")
@@ -764,10 +764,8 @@ local function getOrCreateEspEntry(index)
 
 	local boxFrame = Instance.new("Frame")
 	boxFrame.Name = "EspBox_" .. tostring(index)
-	boxFrame.BackgroundColor3 = COLOR_ESP_CLEAR_GREEN
-	boxFrame.BackgroundTransparency = 0.88
-	boxFrame.BorderSizePixel = 1
-	boxFrame.BorderColor3 = COLOR_ESP_CLEAR_GREEN
+	boxFrame.BackgroundTransparency = 1
+	boxFrame.BorderSizePixel = 0
 	boxFrame.Visible = false
 	boxFrame.Active = false
 	boxFrame.ZIndex = 4
@@ -781,9 +779,8 @@ local function getOrCreateEspEntry(index)
 	local hpBg = Instance.new("Frame")
 	hpBg.Name = "EspHpBg_" .. tostring(index)
 	hpBg.BackgroundColor3 = Color3.fromRGB(15, 16, 20)
-	hpBg.BackgroundTransparency = 0.15
-	hpBg.BorderSizePixel = 1
-	hpBg.BorderColor3 = Color3.fromRGB(10, 10, 12)
+	hpBg.BackgroundTransparency = 0.25
+	hpBg.BorderSizePixel = 0
 	hpBg.Visible = false
 	hpBg.Active = false
 	hpBg.ZIndex = 4
@@ -802,9 +799,9 @@ local function getOrCreateEspEntry(index)
 	local distLabel = Instance.new("TextLabel")
 	distLabel.Name = "EspDist_" .. tostring(index)
 	distLabel.BackgroundTransparency = 1
-	distLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-	distLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-	distLabel.TextStrokeTransparency = 0
+	distLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
+	distLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
+	distLabel.TextStrokeTransparency = 0.15
 	distLabel.Font = Enum.Font.GothamBold
 	distLabel.TextSize = 11
 	distLabel.Text = ""
@@ -959,17 +956,6 @@ local function updateESPVisuals(cam, originPos)
 					seenModels[obj] = true
 					table.insert(candidates, { model = obj, hum = hum })
 				end
-			elseif obj:IsA("Folder") and not seenModels[obj] then
-				seenModels[obj] = true
-				for _, child in ipairs(obj:GetChildren()) do
-					if child:IsA("Model") and not PlayerCharacterSet[child] and child ~= LocalPlayer.Character and not seenModels[child] then
-						local hum = child:FindFirstChildOfClass("Humanoid")
-						if hum and hum.Health > 0 then
-							seenModels[child] = true
-							table.insert(candidates, { model = child, hum = hum })
-						end
-					end
-				end
 			end
 		end
 	end
@@ -1034,7 +1020,6 @@ local function updateESPVisuals(cam, originPos)
 							if Config.ESPBox then
 								entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
 								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
-								entry.box.BorderColor3 = boxColor
 								if entry.stroke then
 									entry.stroke.Color = boxColor
 								end
@@ -1085,7 +1070,7 @@ pcall(function()
 	ScreenGui.Name = "SilentAimGeminiGUI"
 	ScreenGui.ResetOnSpawn = false
 	ScreenGui.IgnoreGuiInset = true
-	ScreenGui.DisplayOrder = 100
+	ScreenGui.DisplayOrder = 999999
 	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 	ESPContainer = Instance.new("Frame")
@@ -2016,7 +2001,7 @@ local function isWithinSafeServerAngle(cam, worldPos)
 	if toTarget.Magnitude <= 14 then return true end
 	local dot = math.clamp(lookDir.Unit:Dot(toTarget.Unit), -1, 1)
 	local angleDeg = math.deg(math.acos(dot))
-	local limitDeg = math.max(tonumber(Config.MaxSafeAngleDeg) or 28, 85)
+	local limitDeg = math.max(tonumber(Config.MaxSafeAngleDeg) or 28, 65)
 	return angleDeg <= limitDeg
 end
 
