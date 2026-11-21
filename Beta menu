@@ -1,5 +1,5 @@
 -- ============================================================================
--- SILENT AIM GEMINI - NO ESP (NO AIMBOT, NO NOTICE BAR, RESTORED SILENT AIM)
+-- SILENT AIM GEMINI - NO ESP (NO CRASH ON RUN, NO AIMBOT, NO NOTICE BAR)
 -- ============================================================================
 
 local Players = game:GetService("Players")
@@ -1671,33 +1671,24 @@ RunService.RenderStepped:Connect(function(dt)
 	end)
 end)
 
-local function ensureSilentTargetPart()
-	if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
-		return CachedTarget
-	end
-	if not isSilentActive() then
-		return nil
-	end
-	local freshTarget = findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck)
-	if freshTarget and freshTarget.Parent and isFiniteVector3(freshTarget.Position) then
-		CachedTarget = freshTarget
-		local cam = Workspace.CurrentCamera
-		local originPos = getOriginPosition(cam)
-		CachedAimPos = computePredictedPosition(originPos, freshTarget, freshTarget.AssemblyLinearVelocity or Vector3.zero) or freshTarget.Position
-		return freshTarget
-	end
-	return nil
-end
+local inHookGuard = false
 
 local function getActiveSilentAimPoint()
-	local part = ensureSilentTargetPart()
-	if part and part.Parent and isFiniteVector3(part.Position) then
-		if CachedTarget == part and CachedAimPos and isFiniteVector3(CachedAimPos) then
-			return CachedAimPos
+	if inHookGuard then return nil end
+	inHookGuard = true
+	local resultPos = nil
+	pcall(function()
+		if not isSilentActive() then return end
+		if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
+			if CachedAimPos and isFiniteVector3(CachedAimPos) then
+				resultPos = CachedAimPos
+			else
+				resultPos = CachedTarget.Position
+			end
 		end
-		return part.Position
-	end
-	return nil
+	end)
+	inHookGuard = false
+	return resultPos
 end
 
 local function aimDirection(origin, originalDirection, targetPos)
@@ -1710,18 +1701,22 @@ local function aimDirection(origin, originalDirection, targetPos)
 end
 
 local function safeHookMetamethod(target, metamethod, handler)
-	if hookmetamethod then
+	if type(hookmetamethod) == "function" then
 		local ok, oldFn = pcall(hookmetamethod, target, metamethod, handler)
-		if ok and oldFn then return oldFn end
+		if ok and type(oldFn) == "function" then return oldFn end
 	end
-	if getrawmetatable and setreadonly then
+	if type(getrawmetatable) == "function" and type(setreadonly) == "function" then
 		local ok, mt = pcall(getrawmetatable, target)
 		if ok and type(mt) == "table" and type(mt[metamethod]) == "function" then
 			local oldFn = mt[metamethod]
-			pcall(setreadonly, mt, false)
-			mt[metamethod] = function(...) return handler(...) end
-			pcall(setreadonly, mt, true)
-			return oldFn
+			local unlocked = pcall(setreadonly, mt, false)
+			if unlocked then
+				local replaced = pcall(function()
+					mt[metamethod] = newcclosure and newcclosure(handler) or handler
+				end)
+				pcall(setreadonly, mt, true)
+				if replaced then return oldFn end
+			end
 		end
 	end
 	return nil
@@ -1733,10 +1728,12 @@ local SUSPICIOUS_REMOTE_PATTERNS = {
 }
 
 local function isSuspiciousClientRemote(inst)
-	if not inst or not (inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") or inst:IsA("BindableEvent") or inst:IsA("BindableFunction")) then
+	if typeof(inst) ~= "Instance" then return false end
+	local className = inst.ClassName
+	if className ~= "RemoteEvent" and className ~= "RemoteFunction" and className ~= "BindableEvent" and className ~= "BindableFunction" then
 		return false
 	end
-	local lowerName = string.lower(inst.Name or "")
+	local lowerName = string.lower(tostring(inst.Name or ""))
 	for _, pat in ipairs(SUSPICIOUS_REMOTE_PATTERNS) do
 		if string.find(lowerName, pat, 1, true) then
 			return true
@@ -1745,73 +1742,77 @@ local function isSuspiciousClientRemote(inst)
 	return false
 end
 
-pcall(function()
-	if hookfunction and LocalPlayer and type(LocalPlayer.Kick) == "function" then
-		local oldKick
-		oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
-			if Config.AntiKickClient and self == LocalPlayer then
-				return nil
+task.defer(function()
+	pcall(function()
+		if type(hookfunction) == "function" and LocalPlayer and type(LocalPlayer.Kick) == "function" then
+			local oldKick
+			oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
+				if Config.AntiKickClient and rawequal(self, LocalPlayer) then
+					return nil
+				end
+				return oldKick(self, ...)
+			end)
+		end
+	end)
+
+	pcall(function()
+		if type(hookfunction) == "function" and TeleportService then
+			if type(TeleportService.Teleport) == "function" then
+				local oldTeleport
+				oldTeleport = hookfunction(TeleportService.Teleport, function(self, ...)
+					if Config.AntiKickClient and not (type(checkcaller) == "function" and checkcaller()) then
+						return nil
+					end
+					return oldTeleport(self, ...)
+				end)
 			end
-			return oldKick(self, ...)
-		end)
-	end
-end)
+			if type(TeleportService.TeleportToPlaceInstance) == "function" then
+				local oldTpInst
+				oldTpInst = hookfunction(TeleportService.TeleportToPlaceInstance, function(self, ...)
+					if Config.AntiKickClient and not (type(checkcaller) == "function" and checkcaller()) then
+						return nil
+					end
+					return oldTpInst(self, ...)
+				end)
+			end
+		end
+	end)
 
-pcall(function()
-	if hookfunction and TeleportService then
-		if type(TeleportService.Teleport) == "function" then
-			local oldTeleport
-			oldTeleport = hookfunction(TeleportService.Teleport, function(self, ...)
-				if Config.AntiKickClient and not (checkcaller and checkcaller()) then
-					return nil
-				end
-				return oldTeleport(self, ...)
+	pcall(function()
+		if GuiService then
+			GuiService.ErrorMessageChanged:Connect(function()
+				if not Config.AntiKickClient then return end
+				pcall(function() GuiService:ClearError() end)
 			end)
 		end
-		if type(TeleportService.TeleportToPlaceInstance) == "function" then
-			local oldTpInst
-			oldTpInst = hookfunction(TeleportService.TeleportToPlaceInstance, function(self, ...)
-				if Config.AntiKickClient and not (checkcaller and checkcaller()) then
-					return nil
-				end
-				return oldTpInst(self, ...)
-			end)
-		end
-	end
-end)
+	end)
 
-pcall(function()
-	if GuiService then
-		GuiService.ErrorMessageChanged:Connect(function()
-			if not Config.AntiKickClient then return end
-			pcall(function() GuiService:ClearError() end)
-		end)
-	end
-end)
+	pcall(function()
+		if type(getnamecallmethod) ~= "function" then return end
+		local oldNamecall
+		oldNamecall = safeHookMetamethod(game, "__namecall", function(self, ...)
+			if type(oldNamecall) ~= "function" then return nil end
+			if inHookGuard then return oldNamecall(self, ...) end
 
-pcall(function()
-	if not getnamecallmethod then
-		warn("[SilentAimGemini] Executor khong ho tro getnamecallmethod.")
-		return
-	end
-	local oldNamecall
-	oldNamecall = safeHookMetamethod(game, "__namecall", function(self, ...)
-		local okMethod, method = pcall(getnamecallmethod)
-		if okMethod then
+			local okMethod, method = pcall(getnamecallmethod)
+			if not okMethod or type(method) ~= "string" then
+				return oldNamecall(self, ...)
+			end
+
 			if Config.AntiKickClient then
-				if method == "Kick" and self == LocalPlayer then
+				if method == "Kick" and rawequal(self, LocalPlayer) then
 					return nil
 				end
 				if (method == "FireServer" or method == "InvokeServer") and isSuspiciousClientRemote(self) then
-					if not checkcaller or not checkcaller() then
+					if not (type(checkcaller) == "function" and checkcaller()) then
 						return nil
 					end
 				end
 			end
 
-			if isSilentActive() then
+			if isSilentActive() and CachedTarget then
 				local aimPoint = getActiveSilentAimPoint()
-				if aimPoint and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") then
+				if aimPoint then
 					if method == "Raycast" then
 						local args = { ... }
 						local origin, direction = args[1], args[2]
@@ -1819,63 +1820,65 @@ pcall(function()
 							args[2] = aimDirection(origin, direction, aimPoint)
 							return oldNamecall(self, table.unpack(args))
 						end
-					else
+					elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
 						local args = { ... }
 						local ray = args[1]
 						if typeof(ray) == "Ray" and isFiniteVector3(ray.Origin) and isFiniteVector3(ray.Direction) then
 							args[1] = Ray.new(ray.Origin, aimDirection(ray.Origin, ray.Direction, aimPoint))
 							return oldNamecall(self, table.unpack(args))
 						end
-					end
-				elseif aimPoint and method == "FireServer" and typeof(self) == "Instance" and self:IsA("RemoteEvent") and not isSuspiciousClientRemote(self) then
-					local args = { ... }
-					local changed = false
-					for i = 1, #args do
-						local v = args[i]
-						if typeof(v) == "Vector3" then
-							args[i] = aimPoint
-							changed = true
-						elseif typeof(v) == "CFrame" then
-							args[i] = CFrame.lookAt(v.Position, aimPoint)
-							changed = true
+					elseif method == "FireServer" and typeof(self) == "Instance" and self.ClassName == "RemoteEvent" and not isSuspiciousClientRemote(self) then
+						local args = { ... }
+						local changed = false
+						for i = 1, #args do
+							local v = args[i]
+							if typeof(v) == "Vector3" then
+								args[i] = aimPoint
+								changed = true
+							elseif typeof(v) == "CFrame" then
+								args[i] = CFrame.lookAt(v.Position, aimPoint)
+								changed = true
+							end
 						end
-					end
-					if changed then
-						return oldNamecall(self, table.unpack(args))
+						if changed then
+							return oldNamecall(self, table.unpack(args))
+						end
 					end
 				end
 			end
-		end
-		return oldNamecall(self, ...)
-	end)
-end)
 
-pcall(function()
-	local Mouse = LocalPlayer:GetMouse()
-	if Mouse then
-		local oldIndex
-		oldIndex = safeHookMetamethod(Mouse, "__index", function(self, key)
-			if isSilentActive() then
-				local aimPoint = getActiveSilentAimPoint()
-				local part = ensureSilentTargetPart()
-				if aimPoint then
-					if key == "Hit" then
-						return CFrame.new(aimPoint)
-					elseif key == "Target" and part then
-						return part
-					elseif key == "UnitRay" then
-						local cam = Workspace.CurrentCamera
-						if cam and isFiniteVector3(cam.CFrame.Position) then
-							local origin = cam.CFrame.Position
-							local delta = aimPoint - origin
-							if isFiniteVector3(delta) and delta.Magnitude > 1e-5 then
-								return Ray.new(origin, delta.Unit)
+			return oldNamecall(self, ...)
+		end)
+	end)
+
+	pcall(function()
+		local Mouse = LocalPlayer:GetMouse()
+		if Mouse then
+			local oldIndex
+			oldIndex = safeHookMetamethod(Mouse, "__index", function(self, key)
+				if type(oldIndex) ~= "function" then return nil end
+				if inHookGuard then return oldIndex(self, key) end
+				if isSilentActive() and CachedTarget and (key == "Hit" or key == "Target" or key == "UnitRay") then
+					local aimPoint = getActiveSilentAimPoint()
+					if aimPoint then
+						if key == "Hit" then
+							return CFrame.new(aimPoint)
+						elseif key == "Target" then
+							return CachedTarget
+						elseif key == "UnitRay" then
+							local cam = Workspace.CurrentCamera
+							if cam and isFiniteVector3(cam.CFrame.Position) then
+								local origin = cam.CFrame.Position
+								local delta = aimPoint - origin
+								if isFiniteVector3(delta) and delta.Magnitude > 1e-5 then
+									return Ray.new(origin, delta.Unit)
+								end
 							end
 						end
 					end
 				end
-			end
-			return oldIndex(self, key)
-		end)
-	end
+				return oldIndex(self, key)
+			end)
+		end
+	end)
 end)
