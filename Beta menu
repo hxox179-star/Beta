@@ -36,7 +36,7 @@ local function getDefaultConfig()
 		AimMode = "Player + NPC",
 		TeamCheck = false,
 		WallCheck = false,
-		FOVRadius = 180,
+		FOVRadius = 240,
 		ShowFOV = false,
 		TriggerFOVRadius = 6,
 		ShowTriggerFOV = true,
@@ -109,7 +109,6 @@ local lastWallCheckTime = 0
 local lastSeatCheckTime = 0
 local lastFarRenderSyncTime = 0
 local lastTriggerFireTime = 0
-local lastEspRenderTime = 0
 local isTriggerBurstBusy = false
 local elapsedClock = 0
 local isScanningNpc = false
@@ -1015,36 +1014,30 @@ local function updateESPVisuals(cam, originPos)
 				local centerScreen, onScreen = cam:WorldToViewportPoint(anchor.Position)
 				local sx, sy, sz = centerScreen.X, centerScreen.Y, centerScreen.Z
 
-				if onScreen and isFiniteNumber(sx) and isFiniteNumber(sy) and isFiniteNumber(sz) and sz > 0.1 then
+				if onScreen and isFiniteNumber(sx) and isFiniteNumber(sy) and isFiniteNumber(sz) and sz > 0.05 then
 					local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
-						and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.55, 0))
-						or (anchor.Position + Vector3.new(0, 3.0, 0))
-					local bottomWorld = anchor.Position - Vector3.new(0, 3.2, 0)
+						and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.5, 0))
+						or (anchor.Position + Vector3.new(0, 2.8, 0))
+					local bottomWorld = anchor.Position - Vector3.new(0, 3.0, 0)
 
 					local topScreen = cam:WorldToViewportPoint(topWorld)
 					local botScreen = cam:WorldToViewportPoint(bottomWorld)
 
-					local topY = (topScreen.Z > 0.1 and isFiniteNumber(topScreen.Y)) and topScreen.Y or (sy - (1200 / sz))
-					local botY = (botScreen.Z > 0.1 and isFiniteNumber(botScreen.Y)) and botScreen.Y or (sy + (1200 / sz))
-
-					local boxHeight = math.clamp(math.abs(botY - topY), 18, vp.Y * 0.85)
-					local boxWidth = math.clamp(boxHeight * 0.56, 14, vp.X * 0.55)
-					local minY = math.min(topY, botY)
-
+					local rawHeight = math.abs(botScreen.Y - topScreen.Y)
+					local boxHeight = math.clamp(rawHeight > 4 and rawHeight or (320 / math.max(sz, 1)), 16, vp.Y * 0.85)
+					local boxWidth = math.clamp(boxHeight * 0.56, 12, vp.X * 0.55)
 					local boxLeft = math.floor(sx - boxWidth * 0.5)
-					local boxTop = math.floor(minY)
+					local boxTop = math.floor(sy - boxHeight * 0.5)
 					local boxW = math.floor(boxWidth)
 					local boxH = math.floor(boxHeight)
 
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
 					if entry then
-						local isBlocked = false
-						if Config.ESPWallCheck then
-							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
-							isBlocked = blockedFlag
+						local boxColor = COLOR_ESP_CLEAR_GREEN
+						if Config.ESPWallCheck and CachedTarget and CachedTarget.Parent == model and CachedIsWallBlocked and not CachedBypassWall then
+							boxColor = COLOR_ESP_WALL_WHITE
 						end
-						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
 
 						if entry.box then
 							if Config.ESPBox then
@@ -1715,7 +1708,7 @@ pcall(function()
 		updateFOVVisual()
 	end)
 	FOVPlus.MouseButton1Click:Connect(function()
-		Config.FOVRadius = math.min(600, Config.FOVRadius + 15)
+		Config.FOVRadius = math.min(800, Config.FOVRadius + 15)
 		updateFOVVisual()
 	end)
 
@@ -1934,31 +1927,10 @@ local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
 	return false
 end
 
-local function fireToolEventsIfPresent(tool)
-	if not tool then return false end
-	local triggered = false
-	for _, desc in ipairs(tool:GetDescendants()) do
-		local lower = string.lower(desc.Name or "")
-		if string.find(lower, "fire", 1, true) or string.find(lower, "shoot", 1, true) or string.find(lower, "activate", 1, true) or string.find(lower, "trigger", 1, true) then
-			if desc:IsA("RemoteEvent") then
-				pcall(function()
-					desc:FireServer()
-					triggered = true
-				end)
-			elseif desc:IsA("BindableEvent") then
-				pcall(function()
-					desc:Fire()
-					triggered = true
-				end)
-			end
-		end
-	end
-	return triggered
-end
-
 local function pulseTriggerFire()
+	if isFiringInputHeld then return end
 	if isTriggerBurstBusy then return end
-	if elapsedClock - lastTriggerFireTime < 0.08 then return end
+	if elapsedClock - lastTriggerFireTime < 0.045 then return end
 
 	lastTriggerFireTime = elapsedClock
 	isTriggerBurstBusy = true
@@ -1969,8 +1941,6 @@ local function pulseTriggerFire()
 		pcall(function() tool:Activate() end)
 	end
 
-	fireToolEventsIfPresent(tool)
-
 	if VirtualInputManager then
 		local cam = Workspace.CurrentCamera
 		local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
@@ -1979,7 +1949,7 @@ local function pulseTriggerFire()
 		pcall(function()
 			VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
 		end)
-		task.delay(0.03, function()
+		task.delay(0.015, function()
 			pcall(function()
 				VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
 			end)
@@ -2012,12 +1982,12 @@ local function evaluateCandidateModel(model, hum, cam, originPos, centerX, cente
 		return nil, shortestDistance
 	end
 	local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-	if onScreen and isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
+	if isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
 		local dx = screenPos.X - centerX
 		local dy = screenPos.Y - centerY
 		local dist = math.sqrt(dx * dx + dy * dy)
-		local effectiveFov = math.max(tonumber(fovLimit) or 180, 180)
-		if dist <= math.min(shortestDistance, effectiveFov) and isClearPathWithWallFlag(model, part, part.Position, hum, wallFlag) then
+		local effectiveFov = math.max(tonumber(fovLimit) or 240, 240)
+		if (onScreen or dist <= effectiveFov) and dist <= math.min(shortestDistance, effectiveFov) and isClearPathWithWallFlag(model, part, part.Position, hum, wallFlag) then
 			return part, dist
 		end
 	end
@@ -2033,7 +2003,24 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	local centerY = vp.Y * 0.5
 	local originPos = getOriginPosition(cam)
 	local closestPart = nil
-	local shortestDistance = math.max(tonumber(fovLimit) or 180, 180)
+	local shortestDistance = math.max(tonumber(fovLimit) or 240, 240)
+
+	if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
+		local keepModel = CachedTarget.Parent
+		local keepHum = keepModel:FindFirstChildOfClass("Humanoid")
+		if keepHum and keepHum.Health > 0 and isWithinMaxDistance(originPos, CachedTarget) then
+			local sp = cam:WorldToViewportPoint(CachedTarget.Position)
+			if isFiniteNumber(sp.Z) and sp.Z > 0 then
+				local dx = sp.X - centerX
+				local dy = sp.Y - centerY
+				local keepScreenDist = math.sqrt(dx * dx + dy * dy)
+				if keepScreenDist <= shortestDistance * 1.35 and isClearPathWithWallFlag(keepModel, CachedTarget, CachedTarget.Position, keepHum, wallFlag) then
+					closestPart = CachedTarget
+					shortestDistance = math.min(shortestDistance, keepScreenDist * 0.85)
+				end
+			end
+		end
+	end
 
 	local checkPlayers = shouldTargetPlayers()
 	local checkNpcs = shouldTargetNpcs()
@@ -2110,10 +2097,7 @@ RunService.RenderStepped:Connect(function(dt)
 		local cam = Workspace.CurrentCamera
 		local originPos = getOriginPosition(cam)
 
-		if elapsedClock - lastEspRenderTime >= 0.016 then
-			lastEspRenderTime = elapsedClock
-			updateESPVisuals(cam, originPos)
-		end
+		updateESPVisuals(cam, originPos)
 
 		if isSilentActive() then
 			CachedTarget = findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck)
@@ -2129,7 +2113,7 @@ RunService.RenderStepped:Connect(function(dt)
 				CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
 				CachedDistance = rawDist
 
-				if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
+				if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.08) then
 					lastWallCheckTime = elapsedClock
 					CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, targetHum)
 				elseif not Config.WallCheck then
