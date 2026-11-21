@@ -1,7 +1,3 @@
--- ============================================================================
--- SILENT AIM GEMINI - SILENT AIM + ESP + FIXED AUTO FIRE (SAFE UI, SAVE/LOAD)
--- ============================================================================
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -35,8 +31,8 @@ local function getDefaultConfig()
 		ActiveTab = "Silent Aim",
 		AutoSeatToggle = true,
 		AntiKickClient = true,
-		SafeAngleClamp = true,
-		MaxSafeAngleDeg = 28,
+		SafeAngleClamp = false,
+		MaxSafeAngleDeg = 180,
 		AimMode = "Player + NPC",
 		TeamCheck = false,
 		WallCheck = false,
@@ -61,7 +57,7 @@ local function getDefaultConfig()
 		ESPHealthBar = true,
 		ESPDistance = true,
 		ESPWallCheck = true,
-		ESPMaxDistance = 350,
+		ESPMaxDistance = 1000,
 		AutoLoadEnabled = false,
 		SaveName = "Default",
 		DebugLog = false
@@ -198,8 +194,8 @@ local function applyFarRenderState(enabled)
 	captureOriginalRenderState()
 	if enabled then
 		pcall(function()
-			Workspace.StreamingMinRadius = math.max(OriginalRenderState.StreamingMinRadius or 64, 2048)
-			Workspace.StreamingTargetRadius = math.max(OriginalRenderState.StreamingTargetRadius or 256, 4096)
+			Workspace.StreamingMinRadius = math.max(OriginalRenderState.StreamingMinRadius or 64, 4096)
+			Workspace.StreamingTargetRadius = math.max(OriginalRenderState.StreamingTargetRadius or 256, 8192)
 			Workspace.StreamingMaxRadius = math.max(OriginalRenderState.StreamingMaxRadius or 1024, 100000)
 			if Workspace.StreamingEnabled then
 				pcall(function()
@@ -343,7 +339,7 @@ local function applyConfigTable(tbl)
 			Config[k] = tbl[k]
 		end
 	end
-	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 1000, 150, 5000)
 	userDesiredEnabled = Config.Enabled
 end
 
@@ -470,8 +466,8 @@ local function getAimModeText() return "Aim Mode: " .. tostring(Config.AimMode) 
 local function getTargetPartText() return "Mục tiêu: " .. tostring(Config.TargetPart) end
 local function getHeadshotChanceText() return "Tỷ lệ HS (Random): " .. tostring(Config.HeadshotChance) .. "%" end
 local function getMaxDistText()
-	if Config.MaxDistance <= 0 then return "Tầm bắn: Không giới hạn" end
-	return "Tầm bắn: " .. tostring(Config.MaxDistance)
+	if Config.MaxDistance <= 0 then return "Tầm bắn: Liền mạch (0-1000m+)" end
+	return "Tầm bắn: " .. tostring(Config.MaxDistance) .. "m"
 end
 local function getAutoSmartText() return Config.AutoSmartAim and "Siêu đoán hướng: BẬT" or "Siêu đoán hướng: TẮT" end
 local function getNoRecoilText() return Config.NoRecoil and "Không rung tâm: BẬT" or "Không rung tâm: TẮT" end
@@ -509,7 +505,7 @@ local function updateFOVVisual()
 		TriggerFOVLabel.Text = "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius)
 	end
 	if ESPDistLabel then
-		Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+		Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 1000, 150, 5000)
 		ESPDistLabel.Text = getESPDistRangeText()
 	end
 end
@@ -914,7 +910,7 @@ local function updateESPVisuals(cam, originPos)
 	end
 
 	ESPContainer.Visible = true
-	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 1000, 150, 5000)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
 		hideUnusedEspEntries(1)
@@ -1401,7 +1397,6 @@ pcall(function()
 		return lbl, minusBtn, plusBtn
 	end
 
-	-- TAB 1: SILENT AIM
 	local silentPage = PageFrames["Silent Aim"]
 	ToggleSilentBtn = createButton(silentPage, "Silent Aim: TẮT", 1)
 	AimModeBtn = createButton(silentPage, getAimModeText(), 2)
@@ -1422,7 +1417,6 @@ pcall(function()
 	local TrigFOVMinus, TrigFOVPlus
 	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 16)
 
-	-- TAB 2: ESP
 	local espPage = PageFrames["ESP"]
 	ESPEnabledBtn = createButton(espPage, getESPEnabledText(), 1)
 	ESPBoxBtn = createButton(espPage, getESPBoxText(), 2)
@@ -1430,9 +1424,8 @@ pcall(function()
 	ESPDistBtn = createButton(espPage, getESPDistText(), 4)
 	ESPWallBtn = createButton(espPage, getESPWallText(), 5)
 	local ESPDistMinus, ESPDistPlus
-	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-150", "+150", Color3.fromRGB(140, 245, 175), 6)
+	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-250", "+250", Color3.fromRGB(140, 245, 175), 6)
 
-	-- TAB 3: SETTINGS
 	local settingsPage = PageFrames["Settings"]
 	AntiKickBtn = createButton(settingsPage, getAntiKickText(), 1)
 	SafeAngleBtn = createButton(settingsPage, getSafeAngleText(), 2)
@@ -1553,11 +1546,11 @@ pcall(function()
 		ESPWallBtn.BackgroundColor3 = Config.ESPWallCheck and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end)
 	ESPDistMinus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.max(150, (tonumber(Config.ESPMaxDistance) or 350) - 150)
+		Config.ESPMaxDistance = math.max(150, (tonumber(Config.ESPMaxDistance) or 1000) - 250)
 		updateFOVVisual()
 	end)
 	ESPDistPlus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.min(1500, (tonumber(Config.ESPMaxDistance) or 350) + 150)
+		Config.ESPMaxDistance = math.min(5000, (tonumber(Config.ESPMaxDistance) or 1000) + 250)
 		updateFOVVisual()
 	end)
 	AntiKickBtn.MouseButton1Click:Connect(function()
@@ -1594,9 +1587,9 @@ pcall(function()
 		HeadshotChanceBtn.Text = getHeadshotChanceText()
 	end)
 	MaxDistBtn.MouseButton1Click:Connect(function()
-		if Config.MaxDistance == 0 then Config.MaxDistance = 150
-		elseif Config.MaxDistance == 150 then Config.MaxDistance = 250
-		elseif Config.MaxDistance == 250 then Config.MaxDistance = 400
+		if Config.MaxDistance == 0 then Config.MaxDistance = 250
+		elseif Config.MaxDistance == 250 then Config.MaxDistance = 500
+		elseif Config.MaxDistance == 500 then Config.MaxDistance = 1000
 		else Config.MaxDistance = 0 end
 		MaxDistBtn.Text = getMaxDistText()
 	end)
@@ -1796,7 +1789,7 @@ local function estimateTargetVelocity(part, dt, distance)
 
 	if prevTargetPart == part and prevTargetPos and prevSampleTime and dt > 0.001 then
 		local frameVel = (currentPos - prevTargetPos) / dt
-		if isFiniteVector3(frameVel) and frameVel.Magnitude < 160 then
+		if isFiniteVector3(frameVel) and frameVel.Magnitude < 220 then
 			local blend = 0.65
 			estimatedVel = (assemblyVel.Magnitude > 1 and frameVel.Magnitude > 1) and assemblyVel:Lerp(frameVel, blend) or frameVel
 		end
@@ -1817,19 +1810,18 @@ local function computePredictedPosition(origin, part, velocity)
 	end
 	local dist = (basePos - origin).Magnitude
 	local moveSpeed = isFiniteVector3(velocity) and velocity.Magnitude or 0
-	if moveSpeed < 2.5 then return basePos end
+	if moveSpeed < 1.5 then return basePos end
 
-	local nearScale = math.clamp((dist - 18) / 45, 0, 1)
-	if nearScale <= 0.05 then return basePos end
-
+	local continuousScale = math.clamp(dist / 1000, 0.01, 1)
 	local effectiveSpeed = math.max(350, tonumber(Config.BulletSpeed) or 950)
 	local rawLead = dist / effectiveSpeed
-	local maxLead = math.min(tonumber(Config.MaxLeadTime) or 0.24, 0.22)
-	local leadTime = math.clamp(rawLead * nearScale * 0.75, 0, maxLead)
+	local maxLead = math.min(tonumber(Config.MaxLeadTime) or 0.24, 0.24)
+	local leadTime = math.clamp(rawLead * continuousScale, 0, maxLead)
 
 	local predicted = basePos + (velocity * leadTime)
-	if (predicted - basePos).Magnitude > 4.5 then
-		predicted = basePos + (predicted - basePos).Unit * 4.5
+	local maxOffset = math.clamp(dist * 0.05, 0.25, 6)
+	if (predicted - basePos).Magnitude > maxOffset then
+		predicted = basePos + (predicted - basePos).Unit * maxOffset
 	end
 	return isFiniteVector3(predicted) and predicted or basePos
 end
@@ -1837,17 +1829,17 @@ end
 local function isWithinMaxDistance(origin, part)
 	if not part or not isFiniteVector3(part.Position) then return true end
 	local dist = (part.Position - origin).Magnitude
+	if dist < 0 then return false end
 	if Config.FarRender then
 		if Config.MaxDistance > 0 then
-			return dist <= math.max(Config.MaxDistance, 2500)
+			return dist <= math.max(Config.MaxDistance, 4000)
 		end
 		return dist <= 100000
 	end
 	if Config.MaxDistance <= 0 then
-		if Config.AutoSmartAim then return dist <= 10000 end
-		return true
+		return dist <= 100000
 	end
-	return dist <= Config.MaxDistance
+	return dist <= math.max(Config.MaxDistance, 1000)
 end
 
 local function isModelInTriggerFOV(model, hum, cam, originPos, centerX, centerY, radius)
@@ -1998,10 +1990,10 @@ local function isWithinSafeServerAngle(cam, worldPos)
 	if not Config.SafeAngleClamp or not cam then return true end
 	local lookDir = cam.CFrame.LookVector
 	local toTarget = worldPos - cam.CFrame.Position
-	if toTarget.Magnitude <= 14 then return true end
+	if toTarget.Magnitude <= 1e-4 then return true end
 	local dot = math.clamp(lookDir.Unit:Dot(toTarget.Unit), -1, 1)
 	local angleDeg = math.deg(math.acos(dot))
-	local limitDeg = math.max(tonumber(Config.MaxSafeAngleDeg) or 28, 65)
+	local limitDeg = math.clamp(tonumber(Config.MaxSafeAngleDeg) or 180, 1, 180)
 	return angleDeg <= limitDeg
 end
 
@@ -2126,16 +2118,25 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
-			local rawDist = (CachedTarget.Position - originPos).Magnitude
-			CachedTargetVelocity = estimateTargetVelocity(CachedTarget, safeDt, rawDist)
-			CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
-			CachedDistance = rawDist
+			local targetHum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
+			if targetHum and targetHum.Health > 0 then
+				local rawDist = (CachedTarget.Position - originPos).Magnitude
+				CachedTargetVelocity = estimateTargetVelocity(CachedTarget, safeDt, rawDist)
+				CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
+				CachedDistance = rawDist
 
-			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
-				lastWallCheckTime = elapsedClock
-				local hum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
-				CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, hum)
-			elseif not Config.WallCheck then
+				if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
+					lastWallCheckTime = elapsedClock
+					CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, targetHum)
+				elseif not Config.WallCheck then
+					CachedIsWallBlocked = false
+					CachedBypassWall = false
+				end
+			else
+				CachedTarget = nil
+				CachedAimPos = nil
+				CachedTargetVelocity = Vector3.zero
+				CachedDistance = 0
 				CachedIsWallBlocked = false
 				CachedBypassWall = false
 			end
@@ -2171,6 +2172,10 @@ end)
 
 local function getActiveSilentAimPoint()
 	if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
+		local targetHum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
+		if not targetHum or targetHum.Health <= 0 then
+			return nil
+		end
 		if CachedAimPos and isFiniteVector3(CachedAimPos) then
 			return CachedAimPos
 		end
@@ -2182,7 +2187,12 @@ end
 local function aimDirection(origin, originalDirection, targetPos)
 	if not (isFiniteVector3(origin) and isFiniteVector3(targetPos)) then return originalDirection end
 	local toTarget = targetPos - origin
-	if not isFiniteVector3(toTarget) or toTarget.Magnitude <= 1e-5 then return originalDirection end
+	if not isFiniteVector3(toTarget) or toTarget.Magnitude <= 1e-4 then
+		if isFiniteVector3(originalDirection) and originalDirection.Magnitude > 1e-4 then
+			return originalDirection
+		end
+		return Vector3.new(0, 0, -1)
+	end
 	local mag = (isFiniteVector3(originalDirection) and originalDirection.Magnitude > 0) and originalDirection.Magnitude or toTarget.Magnitude
 	local dir = toTarget.Unit * mag
 	return isFiniteVector3(dir) and dir or originalDirection
@@ -2349,7 +2359,7 @@ pcall(function()
 						if cam and isFiniteVector3(cam.CFrame.Position) then
 							local origin = cam.CFrame.Position
 							local delta = aimPoint - origin
-							if isFiniteVector3(delta) and delta.Magnitude > 1e-5 then
+							if isFiniteVector3(delta) and delta.Magnitude > 1e-4 then
 								logHookHit("Mouse.UnitRay")
 								return Ray.new(origin, delta.Unit)
 							end
