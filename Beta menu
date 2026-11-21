@@ -9,7 +9,6 @@ local Workspace = game:GetService("Workspace")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local Lighting = game:GetService("Lighting")
-local VirtualInputManager = pcall(function() return game:GetService("VirtualInputManager") end) and game:GetService("VirtualInputManager") or nil
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -1578,41 +1577,20 @@ end
 
 local function pulseTriggerFire()
 	if isTriggerBurstBusy then return end
-	if elapsedClock - lastTriggerFireTime < 0.14 then return end
+	if elapsedClock - lastTriggerFireTime < 0.18 then return end
 
 	lastTriggerFireTime = elapsedClock
 	isTriggerBurstBusy = true
 
 	task.spawn(function()
-		local fired = false
 		pcall(function()
 			local char = LocalPlayer.Character
 			local tool = char and char:FindFirstChildOfClass("Tool")
 			if tool and type(tool.Activate) == "function" then
 				tool:Activate()
-				fired = true
 			end
 		end)
-
-		if not fired then
-			pcall(function()
-				local cam = Workspace.CurrentCamera
-				local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-				local cx, cy = vp.X * 0.5, vp.Y * 0.5
-				if VirtualInputManager then
-					VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
-					task.wait(0.025)
-					VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
-					fired = true
-				elseif type(mouse1click) == "function" then
-					mouse1click()
-					fired = true
-				end
-			end)
-		else
-			task.wait(0.025)
-		end
-
+		task.wait(0.03)
 		isTriggerBurstBusy = false
 	end)
 end
