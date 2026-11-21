@@ -9,6 +9,7 @@ local Workspace = game:GetService("Workspace")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local Lighting = game:GetService("Lighting")
+local VirtualInputManager = pcall(function() return game:GetService("VirtualInputManager") end) and game:GetService("VirtualInputManager") or nil
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -1527,70 +1528,173 @@ local function resolveEnemyModelFromInstance(hitInst)
 	return nil, nil
 end
 
+local function isGhostOrNonSolidPart(inst)
+	if not inst or not inst:IsA("BasePart") then return false end
+	local model = inst:FindFirstAncestorOfClass("Model")
+	if model and model:FindFirstChildOfClass("Humanoid") then
+		return false
+	end
+	if inst.Transparency >= 0.92 then
+		return true
+	end
+	if inst.CanCollide == false and inst.CanQuery == false then
+		return true
+	end
+	return false
+end
+
 local function checkCrosshairOnEnemy(cam, originPos)
 	if not cam or not isFiniteVector3(cam.CFrame.Position) then return false end
 	local vp = cam.ViewportSize
 	local centerX = vp.X * 0.5
 	local centerY = vp.Y * 0.5
-	local unitRay = cam:ViewportPointToRay(centerX, centerY)
-	if not unitRay or not isFiniteVector3(unitRay.Origin) or not isFiniteVector3(unitRay.Direction) then
-		return false
-	end
-
 	local maxRayDist = (Config.MaxDistance and Config.MaxDistance > 0) and Config.MaxDistance or 2500
 	if Config.FarRender then
 		maxRayDist = math.max(maxRayDist, 25000)
 	end
-	TriggerCrosshairParams.FilterDescendantsInstances = { LocalPlayer.Character }
 
-	local ok, result = pcall(function()
-		return Workspace:Raycast(unitRay.Origin, unitRay.Direction.Unit * maxRayDist, TriggerCrosshairParams)
-	end)
-	if not ok or not result or not result.Instance then
-		return false
-	end
+	local ignoreList = { LocalPlayer.Character }
+	TriggerCrosshairParams.FilterDescendantsInstances = ignoreList
 
-	local model, hum = resolveEnemyModelFromInstance(result.Instance)
-	if not model or not hum then
-		return false
-	end
+	local sampleOffsets = {
+		Vector2.new(0, 0),
+		Vector2.new(-18, 0),
+		Vector2.new(18, 0),
+		Vector2.new(0, -18),
+		Vector2.new(0, 18)
+	}
 
-	local anchor = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head") or result.Instance
-	if anchor and anchor:IsA("BasePart") and isFiniteVector3(anchor.Position) then
-		if not isWithinMaxDistance(originPos, anchor) then
-			return false
-		end
-	end
+	for _, offset in ipairs(sampleOffsets) do
+		local unitRay = cam:ViewportPointToRay(centerX + offset.X, centerY + offset.Y)
+		if unitRay and isFiniteVector3(unitRay.Origin) and isFiniteVector3(unitRay.Direction) then
+			local rayOrigin = unitRay.Origin
+			local rayDirUnit = unitRay.Direction.Unit
+			local remainingDist = maxRayDist
 
-	if Config.TriggerBotWallCheck then
-		local bypassWall = isTargetOnVehicleOrMovingPlatform(model, result.Instance, hum)
-		if not bypassWall then
-			local lookDot = math.clamp(cam.CFrame.LookVector.Unit:Dot((result.Position - cam.CFrame.Position).Unit), -1, 1)
-			if lookDot < 0.975 then
-				return false
+			for _ = 1, 3 do
+				TriggerCrosshairParams.FilterDescendantsInstances = ignoreList
+				local ok, result = pcall(function()
+					return Workspace:Raycast(rayOrigin, rayDirUnit * remainingDist, TriggerCrosshairParams)
+				end)
+				if not ok or not result or not result.Instance then
+					break
+				end
+
+				if isGhostOrNonSolidPart(result.Instance) then
+					table.insert(ignoreList, result.Instance)
+					local traveled = (result.Position - rayOrigin).Magnitude + 0.05
+					remainingDist = remainingDist - traveled
+					rayOrigin = result.Position + rayDirUnit * 0.05
+					if remainingDist <= 0.5 then break end
+				else
+					local model, hum = resolveEnemyModelFromInstance(result.Instance)
+					if model and hum then
+						local anchor = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head") or result.Instance
+						local allowed = true
+						if anchor and anchor:IsA("BasePart") and isFiniteVector3(anchor.Position) then
+							if not isWithinMaxDistance(originPos, anchor) then
+								allowed = false
+							end
+						end
+						if allowed and Config.TriggerBotWallCheck then
+							local bypassWall = isTargetOnVehicleOrMovingPlatform(model, result.Instance, hum)
+							if not bypassWall then
+								local lookDot = math.clamp(cam.CFrame.LookVector.Unit:Dot((result.Position - cam.CFrame.Position).Unit), -1, 1)
+								if lookDot < 0.95 then
+									allowed = false
+								end
+							end
+						end
+						if allowed then
+							return true
+						end
+					end
+					break
+				end
 			end
 		end
 	end
 
-	return true
+	local lockedPart = CachedTarget or CachedChestTarget
+	if isSilentActive() and lockedPart and lockedPart.Parent and isFiniteVector3(lockedPart.Position) then
+		local model = lockedPart:FindFirstAncestorOfClass("Model")
+		local hum = model and model:FindFirstChildOfClass("Humanoid")
+		if model and hum and hum.Health > 0 and isWithinMaxDistance(originPos, lockedPart) then
+			if not Config.TriggerBotWallCheck then
+				return true
+			end
+			local bypassWall = isTargetOnVehicleOrMovingPlatform(model, lockedPart, hum)
+			if bypassWall then
+				return true
+			end
+			local rayDelta = lockedPart.Position - cam.CFrame.Position
+			if rayDelta.Magnitude > 0.01 then
+				SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
+				local okWall, wallHit = pcall(function()
+					return Workspace:Raycast(cam.CFrame.Position, rayDelta, SharedWallParams)
+				end)
+				if okWall and (wallHit == nil or isGhostOrNonSolidPart(wallHit.Instance)) then
+					return true
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+local function fireToolEventsIfPresent(tool)
+	if not tool then return false end
+	local triggered = false
+	for _, desc in ipairs(tool:GetDescendants()) do
+		local lower = string.lower(desc.Name or "")
+		if string.find(lower, "fire", 1, true) or string.find(lower, "shoot", 1, true) or string.find(lower, "activate", 1, true) or string.find(lower, "trigger", 1, true) then
+			if desc:IsA("RemoteEvent") then
+				pcall(function()
+					desc:FireServer()
+					triggered = true
+				end)
+			elseif desc:IsA("BindableEvent") then
+				pcall(function()
+					desc:Fire()
+					triggered = true
+				end)
+			end
+		end
+	end
+	return triggered
 end
 
 local function pulseTriggerFire()
 	if isTriggerBurstBusy then return end
-	if elapsedClock - lastTriggerFireTime < 0.18 then return end
+	if elapsedClock - lastTriggerFireTime < 0.15 then return end
 
 	lastTriggerFireTime = elapsedClock
 	isTriggerBurstBusy = true
 
 	task.spawn(function()
-		pcall(function()
-			local char = LocalPlayer.Character
-			local tool = char and char:FindFirstChildOfClass("Tool")
-			if tool and type(tool.Activate) == "function" then
-				tool:Activate()
-			end
-		end)
-		task.wait(0.03)
+		local char = LocalPlayer.Character
+		local tool = char and char:FindFirstChildOfClass("Tool")
+		if tool and type(tool.Activate) == "function" then
+			pcall(function() tool:Activate() end)
+		end
+
+		fireToolEventsIfPresent(tool)
+
+		if VirtualInputManager then
+			pcall(function()
+				local cam = Workspace.CurrentCamera
+				local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+				local fireX = math.clamp(vp.X * 0.78, 40, vp.X - 40)
+				local fireY = math.clamp(vp.Y * 0.68, 40, vp.Y - 40)
+				VirtualInputManager:SendMouseButtonEvent(fireX, fireY, 0, true, game, 0)
+				task.wait(0.012)
+				VirtualInputManager:SendMouseButtonEvent(fireX, fireY, 0, false, game, 0)
+			end)
+		else
+			task.wait(0.02)
+		end
+
 		isTriggerBurstBusy = false
 	end)
 end
