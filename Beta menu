@@ -167,15 +167,6 @@ local function isCurrentlyFiring()
 	return isFiringInputHeld == true
 end
 
-local function getEffectivePixelFOV(baseFov, cam)
-	local radius = math.max(1, tonumber(baseFov) or 60)
-	if not cam or not isFiniteNumber(cam.FieldOfView) or cam.FieldOfView <= 1 then
-		return radius
-	end
-	local zoomScale = math.clamp(70 / cam.FieldOfView, 1, 3.2)
-	return radius * zoomScale
-end
-
 local function captureOriginalRenderState()
 	if OriginalRenderState.Captured then return end
 	OriginalRenderState.Captured = true
@@ -1245,7 +1236,7 @@ pcall(function()
 	end)
 
 	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseButton1 then
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
 			dragging = false
 		end
 	end)
@@ -2025,7 +2016,7 @@ local function isWithinSafeServerAngle(cam, worldPos)
 	if toTarget.Magnitude <= 14 then return true end
 	local dot = math.clamp(lookDir.Unit:Dot(toTarget.Unit), -1, 1)
 	local angleDeg = math.deg(math.acos(dot))
-	local limitDeg = math.max(tonumber(Config.MaxSafeAngleDeg) or 28, 120)
+	local limitDeg = math.max(tonumber(Config.MaxSafeAngleDeg) or 28, 85)
 	return angleDeg <= limitDeg
 end
 
@@ -2060,9 +2051,8 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	local centerX = vp.X * 0.5
 	local centerY = vp.Y * 0.5
 	local originPos = getOriginPosition(cam)
-	local effectiveFov = getEffectivePixelFOV(fovLimit, cam)
 	local closestPart = nil
-	local shortestDistance = effectiveFov
+	local shortestDistance = fovLimit
 
 	local checkPlayers = shouldTargetPlayers()
 	local checkNpcs = shouldTargetNpcs()
@@ -2074,7 +2064,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 			if isEnemyPlayer(player) then
 				local char = player.Character
 				local hum = char:FindFirstChildOfClass("Humanoid")
-				local pickedPart, newDist = evaluateCandidateModel(char, hum, cam, originPos, centerX, centerY, shortestDistance, partPicker, effectiveFov, wallFlag)
+				local pickedPart, newDist = evaluateCandidateModel(char, hum, cam, originPos, centerX, centerY, shortestDistance, partPicker, fovLimit, wallFlag)
 				if pickedPart then
 					closestPart = pickedPart
 					shortestDistance = newDist
@@ -2093,7 +2083,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 			local npcModel = entry.model
 			local hum = entry.hum
 			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
-				local pickedPart, newDist = evaluateCandidateModel(npcModel, hum, cam, originPos, centerX, centerY, shortestDistance, partPicker, effectiveFov, wallFlag)
+				local pickedPart, newDist = evaluateCandidateModel(npcModel, hum, cam, originPos, centerX, centerY, shortestDistance, partPicker, fovLimit, wallFlag)
 				if pickedPart then
 					closestPart = pickedPart
 					shortestDistance = newDist
