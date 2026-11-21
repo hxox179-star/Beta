@@ -20,7 +20,7 @@ if not LocalPlayer then
 end
 
 local AIM_TARGET_MODES = { "Player + NPC", "Player", "NPC" }
-local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Head + Body", "Random" }
+local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Random" }
 local HEADSHOT_CHANCE_PRESETS = { 25, 50, 75, 100 }
 local TABS = { "Silent Aim", "ESP", "Settings" }
 
@@ -44,7 +44,7 @@ local function getDefaultConfig()
 		ShowFOV = false,
 		TriggerFOVRadius = 6,
 		ShowTriggerFOV = true,
-		TargetPart = "Head + Body",
+		TargetPart = "Head",
 		HeadshotChance = 50,
 		MaxDistance = 0,
 		AutoSmartAim = false,
@@ -478,16 +478,7 @@ local function getAutoSeatText() return Config.AutoSeatToggle and "Tự tắt kh
 local function getAntiKickText() return Config.AntiKickClient and "Siêu Antiban/Kick: BẬT" or "Siêu Antiban/Kick: TẮT" end
 local function getSafeAngleText() return Config.SafeAngleClamp and ("Lách góc Server (" .. tostring(Config.MaxSafeAngleDeg) .. "°): BẬT") or "Lách góc Server: TẮT" end
 local function getAimModeText() return "Aim Mode: " .. tostring(Config.AimMode) end
-local function getTargetPartText()
-	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
-		return "Mục tiêu: Đầu + Ngực (Random)"
-	elseif Config.TargetPart == "HumanoidRootPart" then
-		return "Mục tiêu: Ngực (Body)"
-	elseif Config.TargetPart == "Head" then
-		return "Mục tiêu: Đầu (Head)"
-	end
-	return "Mục tiêu: " .. tostring(Config.TargetPart)
-end
+local function getTargetPartText() return "Mục tiêu: " .. tostring(Config.TargetPart) end
 local function getHeadshotChanceText() return "Tỷ lệ HS (Random): " .. tostring(Config.HeadshotChance) .. "%" end
 local function getMaxDistText()
 	if Config.MaxDistance <= 0 then return "Tầm bắn: Không giới hạn" end
@@ -674,25 +665,17 @@ end
 local function resolveHeadOrPart(model, preferredPart)
 	if not model then return preferredPart end
 	local head = model:FindFirstChild("Head")
-	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso") or model:FindFirstChild("HumanoidRootPart")
-	local validHead = (head and head:IsA("BasePart") and isFiniteVector3(head.Position)) and head or nil
-	local validBody = (torso and torso:IsA("BasePart") and isFiniteVector3(torso.Position)) and torso or nil
-
-	if Config.TargetPart == "Head" then
-		return validHead or preferredPart
-	end
-	if Config.TargetPart == "HumanoidRootPart" then
-		return validBody or preferredPart
-	end
-	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
-		if validHead and validBody then
-			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
-			return (math.random(1, 100) <= chance) and validHead or validBody
+	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+		if Config.TargetPart == "Head" then
+			return head
 		end
-		return validHead or validBody or preferredPart
-	end
-	if preferredPart and preferredPart:IsA("BasePart") and Config.AutoSmartAim and validHead then
-		return validHead
+		if Config.TargetPart == "Random" then
+			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
+			return (math.random(1, 100) <= chance) and head or preferredPart
+		end
+		if preferredPart and preferredPart:IsA("BasePart") and Config.AutoSmartAim then
+			return head
+		end
 	end
 	return preferredPart
 end
@@ -702,27 +685,24 @@ local function pickModelTargetPart(model)
 	local head = model:FindFirstChild("Head")
 	local hrp = model:FindFirstChild("HumanoidRootPart")
 	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
-	local bodyPart = (torso and torso:IsA("BasePart") and torso) or (hrp and hrp:IsA("BasePart") and hrp) or nil
 
-	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
+	if Config.TargetPart == "Random" then
 		local hasHead = head and head:IsA("BasePart")
-		if hasHead and bodyPart then
+		local fallbackBody = (hrp and hrp:IsA("BasePart") and hrp) or (torso and torso:IsA("BasePart") and torso) or nil
+		if hasHead and fallbackBody then
 			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
-			return (math.random(1, 100) <= chance) and head or bodyPart
+			return (math.random(1, 100) <= chance) and head or fallbackBody
 		end
-		return (hasHead and head) or bodyPart or nil
-	end
-
-	if Config.TargetPart == "HumanoidRootPart" then
-		return bodyPart or (head and head:IsA("BasePart") and head) or nil
+		return (hasHead and head) or fallbackBody or nil
 	end
 
 	local chosen = model:FindFirstChild(Config.TargetPart)
 	if chosen and chosen:IsA("BasePart") then
-		return chosen
+		return resolveHeadOrPart(model, chosen)
 	end
-	if head and head:IsA("BasePart") then return head end
-	return bodyPart
+	if hrp and hrp:IsA("BasePart") then return resolveHeadOrPart(model, hrp) end
+	if torso and torso:IsA("BasePart") then return resolveHeadOrPart(model, torso) end
+	return (head and head:IsA("BasePart")) and head or nil
 end
 
 local function mountGui(gui)
@@ -1277,7 +1257,7 @@ pcall(function()
 	HButton.InputBegan:Connect(beginDrag)
 
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseMovement) then
 			local delta = input.Position - dragStart
 			if delta.Magnitude > 5 then movedWhileDrag = true end
 			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -1650,7 +1630,7 @@ pcall(function()
 		updateFOVVisual()
 	end)
 	TargetPartBtn.MouseButton1Click:Connect(function()
-		Config.TargetPart = cyclePreset(TARGET_PART_MODES, Config.TargetPart, "Head + Body")
+		Config.TargetPart = cyclePreset(TARGET_PART_MODES, Config.TargetPart, "Head")
 		TargetPartBtn.Text = getTargetPartText()
 	end)
 	HeadshotChanceBtn.MouseButton1Click:Connect(function()
