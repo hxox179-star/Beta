@@ -48,6 +48,8 @@ local function getDefaultConfig()
 		ShowFOV = false,
 		AimbotFOVRadius = 60,
 		ShowAimbotFOV = false,
+		TriggerFOVRadius = 6,
+		ShowTriggerFOV = true,
 		AimbotStickiness = 70,
 		TargetPart = "Head",
 		HeadshotChance = 50,
@@ -69,13 +71,14 @@ end
 
 local Config = getDefaultConfig()
 
-local ScreenGui, FOVFrame, AimbotFOVFrame, FOVLabel, AimbotFOVLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
+local ScreenGui, FOVFrame, AimbotFOVFrame, TriggerFOVFrame, FOVLabel, AimbotFOVLabel, TriggerFOVLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
 local PageFrames = {}
 local TabButtons = {}
-local ToggleSilentBtn, AimEngineBtn, AimbotStickBtn, AimbotWallBtn, ToggleAimbotFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, MaxDistBtn, AutoSmartBtn, NoRecoilBtn, StraightBulletBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
+local ToggleSilentBtn, AimEngineBtn, AimbotStickBtn, AimbotWallBtn, ToggleAimbotFOVBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, MaxDistBtn, AutoSmartBtn, NoRecoilBtn, StraightBulletBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
 local mainStroke
 
 local COLOR_AIMBOT_RED = Color3.fromRGB(255, 45, 55)
+local COLOR_TRIGGER_AMBER = Color3.fromRGB(255, 190, 35)
 local COLOR_H_BLACK_BORDER = Color3.fromRGB(10, 10, 12)
 local COLOR_H_ORANGE_TEXT = Color3.fromRGB(255, 140, 0)
 local COLOR_BG_DARK = Color3.fromRGB(24, 25, 28)
@@ -464,6 +467,7 @@ local function getAimEngineText() return "Chế độ: " .. tostring(Config.AimE
 local function getAimbotStickText() return "Độ dính ngực: " .. tostring(Config.AimbotStickiness) .. "%" end
 local function getAimbotWallText() return Config.AimbotWallCheck and "WallCheck ngực: BẬT" or "WallCheck ngực: TẮT" end
 local function getToggleAimbotFOVText() return Config.ShowAimbotFOV and "FOV Aimbot đỏ: HIỆN" or "FOV Aimbot đỏ: ẨN" end
+local function getToggleTriggerFOVText() return Config.ShowTriggerFOV and "FOV Tự bắn: HIỆN" or "FOV Tự bắn: ẨN" end
 local function getAutoSeatText() return Config.AutoSeatToggle and "Tự tắt khi lên xe: BẬT" or "Tự tắt khi lên xe: TẮT" end
 local function getAntiKickText() return Config.AntiKickClient and "Siêu Antiban/Kick: BẬT" or "Siêu Antiban/Kick: TẮT" end
 local function getSafeAngleText() return Config.SafeAngleClamp and ("Lách góc Server (" .. tostring(Config.MaxSafeAngleDeg) .. "°): BẬT") or "Lách góc Server: TẮT" end
@@ -503,6 +507,15 @@ local function updateFOVVisual()
 	if AimbotFOVLabel then
 		AimbotFOVLabel.Text = "FOV Aimbot: " .. tostring(Config.AimbotFOVRadius)
 	end
+	if TriggerFOVFrame then
+		local clampedTrigFOV = math.clamp(Config.TriggerFOVRadius, 1, 10)
+		Config.TriggerFOVRadius = clampedTrigFOV
+		TriggerFOVFrame.Size = UDim2.new(0, clampedTrigFOV * 2, 0, clampedTrigFOV * 2)
+		TriggerFOVFrame.Visible = (not pausedByVehicle) and Config.TriggerBot and Config.ShowTriggerFOV
+	end
+	if TriggerFOVLabel then
+		TriggerFOVLabel.Text = "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius)
+	end
 end
 
 local function refreshSilentToggleButton()
@@ -525,6 +538,7 @@ local function syncAllUiTexts()
 	if AimbotStickBtn then AimbotStickBtn.Text = getAimbotStickText() end
 	if AimbotWallBtn then AimbotWallBtn.Text = getAimbotWallText() end
 	if ToggleAimbotFOVBtn then ToggleAimbotFOVBtn.Text = getToggleAimbotFOVText() end
+	if ToggleTriggerFOVBtn then ToggleTriggerFOVBtn.Text = getToggleTriggerFOVText() end
 	if AutoSeatBtn then
 		AutoSeatBtn.Text = getAutoSeatText()
 		AutoSeatBtn.BackgroundColor3 = Config.AutoSeatToggle and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
@@ -786,6 +800,26 @@ pcall(function()
 	aimFovStroke.Color = COLOR_AIMBOT_RED
 	aimFovStroke.Thickness = 1.6
 	aimFovStroke.Parent = AimbotFOVFrame
+
+	TriggerFOVFrame = Instance.new("Frame")
+	TriggerFOVFrame.Name = "TriggerBotFOV"
+	TriggerFOVFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	TriggerFOVFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	TriggerFOVFrame.Size = UDim2.new(0, Config.TriggerFOVRadius * 2, 0, Config.TriggerFOVRadius * 2)
+	TriggerFOVFrame.BackgroundTransparency = 1
+	TriggerFOVFrame.Visible = false
+	TriggerFOVFrame.Active = false
+	TriggerFOVFrame.ZIndex = 3
+	TriggerFOVFrame.Parent = ScreenGui
+
+	local trigFovCorner = Instance.new("UICorner")
+	trigFovCorner.CornerRadius = UDim.new(1, 0)
+	trigFovCorner.Parent = TriggerFOVFrame
+
+	local trigFovStroke = Instance.new("UIStroke")
+	trigFovStroke.Color = COLOR_TRIGGER_AMBER
+	trigFovStroke.Thickness = 1.4
+	trigFovStroke.Parent = TriggerFOVFrame
 
 	MainFrame = Instance.new("Frame")
 	MainFrame.Name = "MainFrame"
@@ -1082,6 +1116,9 @@ pcall(function()
 	FOVLabel, FOVMinus, FOVPlus = createStepper(silentPage, "FOV Silent: " .. tostring(Config.FOVRadius), "-15", "+15", Color3.fromRGB(160, 240, 220), 12)
 	TriggerBotBtn = createButton(silentPage, getTriggerBotText(), 13)
 	TriggerWallBtn = createButton(silentPage, getTriggerWallText(), 14)
+	ToggleTriggerFOVBtn = createButton(silentPage, getToggleTriggerFOVText(), 15)
+	local TrigFOVMinus, TrigFOVPlus
+	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 16)
 
 	-- TAB 2: AIMBOT
 	local aimbotPage = PageFrames["Aimbot"]
@@ -1199,6 +1236,11 @@ pcall(function()
 		ToggleAimbotFOVBtn.Text = getToggleAimbotFOVText()
 		updateFOVVisual()
 	end)
+	ToggleTriggerFOVBtn.MouseButton1Click:Connect(function()
+		Config.ShowTriggerFOV = not Config.ShowTriggerFOV
+		ToggleTriggerFOVBtn.Text = getToggleTriggerFOVText()
+		updateFOVVisual()
+	end)
 	AntiKickBtn.MouseButton1Click:Connect(function()
 		Config.AntiKickClient = not Config.AntiKickClient
 		AntiKickBtn.Text = getAntiKickText()
@@ -1274,6 +1316,7 @@ pcall(function()
 		Config.TriggerBot = not Config.TriggerBot
 		TriggerBotBtn.Text = getTriggerBotText()
 		TriggerBotBtn.BackgroundColor3 = Config.TriggerBot and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+		updateFOVVisual()
 	end)
 	TriggerWallBtn.MouseButton1Click:Connect(function()
 		Config.TriggerBotWallCheck = not Config.TriggerBotWallCheck
@@ -1312,6 +1355,14 @@ pcall(function()
 	DebugLogBtn.MouseButton1Click:Connect(function()
 		Config.DebugLog = not Config.DebugLog
 		DebugLogBtn.Text = Config.DebugLog and "Debug Log: BẬT" or "Debug Log: TẮT"
+	end)
+	TrigFOVMinus.MouseButton1Click:Connect(function()
+		Config.TriggerFOVRadius = math.max(1, Config.TriggerFOVRadius - 1)
+		updateFOVVisual()
+	end)
+	TrigFOVPlus.MouseButton1Click:Connect(function()
+		Config.TriggerFOVRadius = math.min(10, Config.TriggerFOVRadius + 1)
+		updateFOVVisual()
 	end)
 	AimFOVMinus.MouseButton1Click:Connect(function()
 		Config.AimbotFOVRadius = math.max(10, Config.AimbotFOVRadius - 10)
@@ -1543,6 +1594,77 @@ local function isGhostOrNonSolidPart(inst)
 	return false
 end
 
+local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
+	if not cam then return false end
+	local vp = cam.ViewportSize
+	local centerX = vp.X * 0.5
+	local centerY = vp.Y * 0.5
+	local radius = math.clamp(tonumber(trigFOV) or 6, 1, 10)
+
+	if shouldTargetPlayers() or shouldTargetNpcs() then
+		rebuildPlayerCharacterSet()
+	end
+
+	local function checkModelInRadius(model, hum)
+		if not model or not hum or hum.Health <= 0 then return false end
+		local checkParts = {
+			model:FindFirstChild("Head"),
+			model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso"),
+			model:FindFirstChild("HumanoidRootPart")
+		}
+		for _, p in ipairs(checkParts) do
+			if p and p:IsA("BasePart") and isFiniteVector3(p.Position) and isWithinMaxDistance(originPos, p) then
+				local screenPos, onScreen = cam:WorldToViewportPoint(p.Position)
+				if onScreen and isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
+					local dx = screenPos.X - centerX
+					local dy = screenPos.Y - centerY
+					if math.sqrt(dx * dx + dy * dy) <= radius then
+						if not Config.TriggerBotWallCheck then
+							return true
+						end
+						if isTargetOnVehicleOrMovingPlatform(model, p, hum) then
+							return true
+						end
+						local rayDelta = p.Position - cam.CFrame.Position
+						if rayDelta.Magnitude > 0.01 then
+							SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
+							local okWall, wallHit = pcall(function()
+								return Workspace:Raycast(cam.CFrame.Position, rayDelta, SharedWallParams)
+							end)
+							if okWall and (wallHit == nil or isGhostOrNonSolidPart(wallHit.Instance)) then
+								return true
+							end
+						end
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	if shouldTargetPlayers() then
+		for _, player in ipairs(Players:GetPlayers()) do
+			if isEnemyPlayer(player) and checkModelInRadius(player.Character, player.Character:FindFirstChildOfClass("Humanoid")) then
+				return true
+			end
+		end
+	end
+
+	if shouldTargetNpcs() then
+		for _, entry in ipairs(CachedNpcEntries) do
+			local npcModel = entry.model
+			local hum = entry.hum
+			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
+				if checkModelInRadius(npcModel, hum) then
+					return true
+				end
+			end
+		end
+	end
+
+	return false
+end
+
 local function checkCrosshairOnEnemy(cam, originPos)
 	if not cam or not isFiniteVector3(cam.CFrame.Position) then return false end
 	local vp = cam.ViewportSize
@@ -1553,15 +1675,21 @@ local function checkCrosshairOnEnemy(cam, originPos)
 		maxRayDist = math.max(maxRayDist, 25000)
 	end
 
+	local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
+	if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
+		return true
+	end
+
 	local ignoreList = { LocalPlayer.Character }
 	TriggerCrosshairParams.FilterDescendantsInstances = ignoreList
 
+	local r = trigRadius
 	local sampleOffsets = {
 		Vector2.new(0, 0),
-		Vector2.new(-18, 0),
-		Vector2.new(18, 0),
-		Vector2.new(0, -18),
-		Vector2.new(0, 18)
+		Vector2.new(-r, 0),
+		Vector2.new(r, 0),
+		Vector2.new(0, -r),
+		Vector2.new(0, r)
 	}
 
 	for _, offset in ipairs(sampleOffsets) do
@@ -1610,31 +1738,6 @@ local function checkCrosshairOnEnemy(cam, originPos)
 						end
 					end
 					break
-				end
-			end
-		end
-	end
-
-	local lockedPart = CachedTarget or CachedChestTarget
-	if isSilentActive() and lockedPart and lockedPart.Parent and isFiniteVector3(lockedPart.Position) then
-		local model = lockedPart:FindFirstAncestorOfClass("Model")
-		local hum = model and model:FindFirstChildOfClass("Humanoid")
-		if model and hum and hum.Health > 0 and isWithinMaxDistance(originPos, lockedPart) then
-			if not Config.TriggerBotWallCheck then
-				return true
-			end
-			local bypassWall = isTargetOnVehicleOrMovingPlatform(model, lockedPart, hum)
-			if bypassWall then
-				return true
-			end
-			local rayDelta = lockedPart.Position - cam.CFrame.Position
-			if rayDelta.Magnitude > 0.01 then
-				SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
-				local okWall, wallHit = pcall(function()
-					return Workspace:Raycast(cam.CFrame.Position, rayDelta, SharedWallParams)
-				end)
-				if okWall and (wallHit == nil or isGhostOrNonSolidPart(wallHit.Instance)) then
-					return true
 				end
 			end
 		end
