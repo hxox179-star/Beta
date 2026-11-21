@@ -42,7 +42,7 @@ local function getDefaultConfig()
 		ShowTriggerFOV = true,
 		TargetPart = "Head",
 		HeadshotChance = 50,
-		MaxDistance = 0,
+		MaxDistance = 1000,
 		AutoSmartAim = false,
 		NoRecoil = false,
 		StraightBullet = false,
@@ -467,7 +467,7 @@ local function getTargetPartText() return "Mục tiêu: " .. tostring(Config.Tar
 local function getHeadshotChanceText() return "Tỷ lệ HS (Random): " .. tostring(Config.HeadshotChance) .. "%" end
 local function getMaxDistText()
 	if Config.MaxDistance <= 0 then return "Tầm bắn: Liền mạch (0-1000m+)" end
-	return "Tầm bắn: " .. tostring(Config.MaxDistance) .. "m"
+	return "Tầm bắn: " .. tostring(Config.MaxDistance) .. "m (0-1000m)"
 end
 local function getAutoSmartText() return Config.AutoSmartAim and "Siêu đoán hướng: BẬT" or "Siêu đoán hướng: TẮT" end
 local function getNoRecoilText() return Config.NoRecoil and "Không rung tâm: BẬT" or "Không rung tâm: TẮT" end
@@ -899,17 +899,57 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
+local function triggerAsyncNpcScan()
+	if isScanningNpc or not shouldTargetNpcs() then return end
+	isScanningNpc = true
+	task.spawn(function()
+		local newEntries = {}
+		local myChar = LocalPlayer.Character
+		pcall(function()
+			for _, obj in ipairs(Workspace:GetChildren()) do
+				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
+					local hum = obj:FindFirstChildOfClass("Humanoid")
+					if hum and hum.Health > 0 then
+						table.insert(newEntries, { model = obj, hum = hum })
+					end
+				end
+			end
+			if #newEntries == 0 or Config.FarRender then
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
+						local hum = obj:FindFirstChildOfClass("Humanoid")
+						if hum and hum.Health > 0 then
+							table.insert(newEntries, { model = obj, hum = hum })
+						end
+					end
+				end
+			end
+		end)
+		CachedNpcEntries = newEntries
+		isScanningNpc = false
+	end)
+end
+
 local function updateESPVisuals(cam, originPos)
-	if not ESPContainer or not cam or not isFiniteVector3(cam.CFrame.Position) then
+	if not ESPContainer then
+		hideUnusedEspEntries(1)
+		return
+	end
+	if not cam or not isFiniteVector3(cam.CFrame.Position) then
 		hideUnusedEspEntries(1)
 		return
 	end
 	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance) then
+		ESPContainer.Visible = false
 		hideUnusedEspEntries(1)
 		return
 	end
 
+	if ScreenGui and not ScreenGui.Parent then
+		mountGui(ScreenGui)
+	end
 	ESPContainer.Visible = true
+
 	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 1000, 150, 5000)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
@@ -937,6 +977,9 @@ local function updateESPVisuals(cam, originPos)
 	end
 
 	if shouldTargetNpcs() then
+		if #CachedNpcEntries == 0 and not isScanningNpc then
+			triggerAsyncNpcScan()
+		end
 		for _, entry in ipairs(CachedNpcEntries) do
 			local npcModel = entry.model
 			local hum = entry.hum
@@ -968,11 +1011,11 @@ local function updateESPVisuals(cam, originPos)
 			local distStuds = (anchor.Position - originPos).Magnitude
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
-			if distStuds <= maxEspDist or distMeters <= maxEspDist then
+			if distStuds <= math.max(maxEspDist, 1000) or distMeters <= maxEspDist then
 				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
-					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
-					or (anchor.Position + Vector3.new(0, 2.8, 0))
-				local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
+					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.5, 0))
+					or (anchor.Position + Vector3.new(0, 3.0, 0))
+				local bottomWorld = anchor.Position - Vector3.new(0, 3.2, 0)
 
 				local topScreen = cam:WorldToViewportPoint(topWorld)
 				local botScreen = cam:WorldToViewportPoint(bottomWorld)
@@ -993,8 +1036,8 @@ local function updateESPVisuals(cam, originPos)
 						botX = math.clamp(vp.X - botX, 0, vp.X)
 					end
 
-					local boxHeight = math.clamp(math.abs(botY - topY), 16, vp.Y * 0.9)
-					local boxWidth = math.clamp(boxHeight * 0.56, 12, vp.X * 0.6)
+					local boxHeight = math.clamp(math.abs(botY - topY), 18, vp.Y * 0.9)
+					local boxWidth = math.clamp(boxHeight * 0.56, 14, vp.X * 0.6)
 					local centerX = (topX + botX) * 0.5
 					local minY = math.min(topY, botY)
 					local boxLeft = math.floor(centerX - boxWidth * 0.5)
@@ -1587,10 +1630,10 @@ pcall(function()
 		HeadshotChanceBtn.Text = getHeadshotChanceText()
 	end)
 	MaxDistBtn.MouseButton1Click:Connect(function()
-		if Config.MaxDistance == 0 then Config.MaxDistance = 250
+		if Config.MaxDistance == 1000 then Config.MaxDistance = 0
+		elseif Config.MaxDistance == 0 then Config.MaxDistance = 250
 		elseif Config.MaxDistance == 250 then Config.MaxDistance = 500
-		elseif Config.MaxDistance == 500 then Config.MaxDistance = 1000
-		else Config.MaxDistance = 0 end
+		else Config.MaxDistance = 1000 end
 		MaxDistBtn.Text = getMaxDistText()
 	end)
 	AutoSmartBtn.MouseButton1Click:Connect(function()
@@ -1745,37 +1788,6 @@ local function getOriginPosition(cam)
 		return cam.CFrame.Position
 	end
 	return Vector3.zero
-end
-
-local function triggerAsyncNpcScan()
-	if isScanningNpc or not shouldTargetNpcs() then return end
-	isScanningNpc = true
-	task.spawn(function()
-		local newEntries = {}
-		local myChar = LocalPlayer.Character
-		pcall(function()
-			for _, obj in ipairs(Workspace:GetChildren()) do
-				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
-					local hum = obj:FindFirstChildOfClass("Humanoid")
-					if hum and hum.Health > 0 then
-						table.insert(newEntries, { model = obj, hum = hum })
-					end
-				end
-			end
-			if #newEntries == 0 or Config.FarRender then
-				for _, obj in ipairs(Workspace:GetDescendants()) do
-					if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
-						local hum = obj:FindFirstChildOfClass("Humanoid")
-						if hum and hum.Health > 0 then
-							table.insert(newEntries, { model = obj, hum = hum })
-						end
-					end
-				end
-			end
-		end)
-		CachedNpcEntries = newEntries
-		isScanningNpc = false
-	end)
 end
 
 local function estimateTargetVelocity(part, dt, distance)
