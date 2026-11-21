@@ -151,6 +151,12 @@ local function isFiniteVector3(v)
 		and isFiniteNumber(v.Z)
 end
 
+local function isCallerOwnScript()
+	if not checkcaller then return false end
+	local ok, res = pcall(checkcaller)
+	return ok and res == true
+end
+
 local function logDebug(msg)
 	if Config.DebugLog then
 		print("[SilentAimGemini] " .. tostring(msg))
@@ -907,6 +913,7 @@ local function updateESPVisuals(cam, originPos)
 		return
 	end
 
+	ESPContainer.Visible = true
 	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
@@ -915,6 +922,7 @@ local function updateESPVisuals(cam, originPos)
 	end
 
 	local candidates = {}
+	local seenModels = {}
 	if shouldTargetPlayers() or shouldTargetNpcs() then
 		rebuildPlayerCharacterSet()
 	end
@@ -924,7 +932,8 @@ local function updateESPVisuals(cam, originPos)
 			if isEnemyPlayer(player) then
 				local char = player.Character
 				local hum = char and char:FindFirstChildOfClass("Humanoid")
-				if char and hum and hum.Health > 0 then
+				if char and hum and hum.Health > 0 and not seenModels[char] then
+					seenModels[char] = true
 					table.insert(candidates, { model = char, hum = hum })
 				end
 			end
@@ -935,8 +944,18 @@ local function updateESPVisuals(cam, originPos)
 		for _, entry in ipairs(CachedNpcEntries) do
 			local npcModel = entry.model
 			local hum = entry.hum
-			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
+			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 and not seenModels[npcModel] then
+				seenModels[npcModel] = true
 				table.insert(candidates, { model = npcModel, hum = hum })
+			end
+		end
+		for _, obj in ipairs(Workspace:GetChildren()) do
+			if obj:IsA("Model") and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character and not seenModels[obj] then
+				local hum = obj:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 then
+					seenModels[obj] = true
+					table.insert(candidates, { model = obj, hum = hum })
+				end
 			end
 		end
 	end
@@ -952,27 +971,36 @@ local function updateESPVisuals(cam, originPos)
 		if anchor and isFiniteVector3(anchor.Position) then
 			local distStuds = (anchor.Position - originPos).Magnitude
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
-			local effectiveDist = math.max(distStuds, distMeters)
 
-			if effectiveDist <= maxEspDist then
+			if distStuds <= maxEspDist or distMeters <= maxEspDist then
 				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
 					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
 					or (anchor.Position + Vector3.new(0, 2.8, 0))
 				local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
 
-				local topScreen, topOnScreen = cam:WorldToViewportPoint(topWorld)
-				local botScreen, botOnScreen = cam:WorldToViewportPoint(bottomWorld)
+				local topScreen = cam:WorldToViewportPoint(topWorld)
+				local botScreen = cam:WorldToViewportPoint(bottomWorld)
 
-				if (topOnScreen or botOnScreen)
-					and isFiniteNumber(topScreen.Z) and isFiniteNumber(botScreen.Z)
-					and (topScreen.Z > 0 or botScreen.Z > 0)
-					and isFiniteNumber(topScreen.X) and isFiniteNumber(topScreen.Y)
-					and isFiniteNumber(botScreen.X) and isFiniteNumber(botScreen.Y) then
+				local topX, topY, topZ = topScreen.X, topScreen.Y, topScreen.Z
+				local botX, botY, botZ = botScreen.X, botScreen.Y, botScreen.Z
 
-					local boxHeight = math.clamp(math.abs(botScreen.Y - topScreen.Y), 14, vp.Y * 0.9)
-					local boxWidth = math.clamp(boxHeight * 0.56, 10, vp.X * 0.6)
-					local centerX = (topScreen.X + botScreen.X) * 0.5
-					local minY = math.min(topScreen.Y, botScreen.Y)
+				if isFiniteNumber(topX) and isFiniteNumber(topY) and isFiniteNumber(topZ)
+					and isFiniteNumber(botX) and isFiniteNumber(botY) and isFiniteNumber(botZ)
+					and (topZ > 0 or botZ > 0) then
+
+					if topZ < 0 then
+						topY = math.clamp(vp.Y - topY, 0, vp.Y)
+						topX = math.clamp(vp.X - topX, 0, vp.X)
+					end
+					if botZ < 0 then
+						botY = math.clamp(vp.Y - botY, 0, vp.Y)
+						botX = math.clamp(vp.X - botX, 0, vp.X)
+					end
+
+					local boxHeight = math.clamp(math.abs(botY - topY), 16, vp.Y * 0.9)
+					local boxWidth = math.clamp(boxHeight * 0.56, 12, vp.X * 0.6)
+					local centerX = (topX + botX) * 0.5
+					local minY = math.min(topY, botY)
 					local boxLeft = math.floor(centerX - boxWidth * 0.5)
 					local boxTop = math.floor(minY)
 					local boxW = math.floor(boxWidth)
@@ -1822,50 +1850,6 @@ local function isWithinMaxDistance(origin, part)
 	return dist <= Config.MaxDistance
 end
 
-local function isGhostOrNonSolidPart(inst)
-	if not inst or not inst:IsA("BasePart") then return false end
-	local model = inst:FindFirstAncestorOfClass("Model")
-	if model and model:FindFirstChildOfClass("Humanoid") then
-		return false
-	end
-	if inst.Transparency >= 0.92 then
-		return true
-	end
-	if inst.CanCollide == false and inst.CanQuery == false then
-		return true
-	end
-	return false
-end
-
-local function checkWallOcclusion(model, targetPart, aimPos, hum)
-	local bypassWall = isTargetOnVehicleOrMovingPlatform(model, targetPart, hum)
-	if bypassWall then return false, true end
-
-	local cam = Workspace.CurrentCamera
-	if not cam or not isFiniteVector3(cam.CFrame.Position) then return false, false end
-
-	local origin = cam.CFrame.Position
-	local goalPos = (aimPos and isFiniteVector3(aimPos)) and aimPos or targetPart.Position
-	local direction = goalPos - origin
-	if not isFiniteVector3(direction) or direction.Magnitude <= 0.001 then return false, false end
-
-	SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
-	local ok, result = pcall(function()
-		return Workspace:Raycast(origin, direction, SharedWallParams)
-	end)
-	if not ok or not result or not result.Instance then return false, false end
-	if isGhostOrNonSolidPart(result.Instance) then return false, false end
-	return true, false
-end
-
-local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
-	if not wallFlag then return true end
-	local isBlocked, bypassWall = checkWallOcclusion(model, targetPart, aimPos, hum)
-	if bypassWall then return true end
-	return not isBlocked
-end
-
--- CƠ CHẾ AUTO BẮN TỐI ƯU: QUÉT TRỰC TIẾP MODEL TRONG FOV TỰ BẮN + KÍCH HOẠT TOOL/INPUT/EVENT
 local function isModelInTriggerFOV(model, hum, cam, originPos, centerX, centerY, radius)
 	if not model or not hum or hum.Health <= 0 then return false end
 	local checkParts = {
@@ -1942,7 +1926,6 @@ local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
 				end
 			end
 		end
-		-- Dự phòng quét trực tiếp trong Workspace nếu cache NPC chưa kịp nạp
 		for _, obj in ipairs(Workspace:GetChildren()) do
 			if obj:IsA("Model") and not checkedModels[obj] and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character then
 				local hum = obj:FindFirstChildOfClass("Humanoid")
@@ -2018,7 +2001,8 @@ local function isWithinSafeServerAngle(cam, worldPos)
 	if toTarget.Magnitude <= 14 then return true end
 	local dot = math.clamp(lookDir.Unit:Dot(toTarget.Unit), -1, 1)
 	local angleDeg = math.deg(math.acos(dot))
-	return angleDeg <= (tonumber(Config.MaxSafeAngleDeg) or 28)
+	local limitDeg = math.max(tonumber(Config.MaxSafeAngleDeg) or 28, 65)
+	return angleDeg <= limitDeg
 end
 
 local function evaluateCandidateModel(model, hum, cam, originPos, centerX, centerY, shortestDistance, partPicker, fovLimit, wallFlag)
@@ -2130,7 +2114,7 @@ RunService.RenderStepped:Connect(function(dt)
 		local cam = Workspace.CurrentCamera
 		local originPos = getOriginPosition(cam)
 
-		if elapsedClock - lastEspRenderTime >= 0.02 then
+		if elapsedClock - lastEspRenderTime >= 0.016 then
 			lastEspRenderTime = elapsedClock
 			updateESPVisuals(cam, originPos)
 		end
@@ -2266,7 +2250,7 @@ pcall(function()
 		if type(TeleportService.Teleport) == "function" then
 			local oldTeleport
 			oldTeleport = hookfunction(TeleportService.Teleport, function(self, ...)
-				if Config.AntiKickClient and not (checkcaller and checkcaller()) then
+				if Config.AntiKickClient and not isCallerOwnScript() then
 					logHookHit("Blocked TeleportService:Teleport")
 					return nil
 				end
@@ -2276,7 +2260,7 @@ pcall(function()
 		if type(TeleportService.TeleportToPlaceInstance) == "function" then
 			local oldTpInst
 			oldTpInst = hookfunction(TeleportService.TeleportToPlaceInstance, function(self, ...)
-				if Config.AntiKickClient and not (checkcaller and checkcaller()) then
+				if Config.AntiKickClient and not isCallerOwnScript() then
 					logHookHit("Blocked TeleportService:TeleportToPlaceInstance")
 					return nil
 				end
@@ -2310,7 +2294,7 @@ pcall(function()
 					return nil
 				end
 				if (method == "FireServer" or method == "InvokeServer") and isSuspiciousClientRemote(self) then
-					if not checkcaller or not checkcaller() then
+					if not isCallerOwnScript() then
 						logHookHit("Blocked suspicious remote: " .. tostring(self.Name))
 						return nil
 					end
@@ -2320,7 +2304,7 @@ pcall(function()
 			if isSilentActive() and self == Workspace and CachedTarget then
 				local aimPoint = getActiveSilentAimPoint()
 				if aimPoint and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") then
-					if not checkcaller or not checkcaller() then
+					if not isCallerOwnScript() then
 						if method == "Raycast" then
 							local args = { ... }
 							local origin, direction = args[1], args[2]
@@ -2353,7 +2337,7 @@ pcall(function()
 		oldIndex = safeHookMetamethod(Mouse, "__index", function(self, key)
 			if isSilentActive() and self == Mouse and CachedTarget then
 				local aimPoint = getActiveSilentAimPoint()
-				if aimPoint and (key == "Hit" or key == "Target" or key == "UnitRay") and (not checkcaller or not checkcaller()) then
+				if aimPoint and (key == "Hit" or key == "Target" or key == "UnitRay") and (not isCallerOwnScript()) then
 					if key == "Hit" then
 						logHookHit("Mouse.Hit")
 						return CFrame.new(aimPoint)
