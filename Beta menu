@@ -5,7 +5,6 @@ local Workspace = game:GetService("Workspace")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local Lighting = game:GetService("Lighting")
-local VirtualInputManager = pcall(function() return game:GetService("VirtualInputManager") end) and game:GetService("VirtualInputManager") or nil
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -36,13 +35,13 @@ local function getDefaultConfig()
 		AimMode = "Player + NPC",
 		TeamCheck = false,
 		WallCheck = false,
-		FOVRadius = 60,
+		FOVRadius = 220,
 		ShowFOV = false,
 		TriggerFOVRadius = 6,
 		ShowTriggerFOV = true,
 		TargetPart = "Head",
 		HeadshotChance = 50,
-		MaxDistance = 0,
+		MaxDistance = 1000,
 		AutoSmartAim = false,
 		NoRecoil = false,
 		StraightBullet = false,
@@ -56,7 +55,7 @@ local function getDefaultConfig()
 		ESPBox = true,
 		ESPHealthBar = true,
 		ESPDistance = true,
-		ESPWallCheck = true,
+		ESPWallCheck = false,
 		ESPMaxDistance = 1000,
 		AutoLoadEnabled = false,
 		SaveName = "Default",
@@ -108,9 +107,7 @@ local lastRainbowUpdateTime = 0
 local lastWallCheckTime = 0
 local lastSeatCheckTime = 0
 local lastFarRenderSyncTime = 0
-local lastTriggerFireTime = 0
-local lastEspRenderTime = 0
-local isTriggerBurstBusy = false
+local lastPlayerSetRebuildTime = 0
 local elapsedClock = 0
 local isScanningNpc = false
 
@@ -197,11 +194,6 @@ local function applyFarRenderState(enabled)
 			Workspace.StreamingMinRadius = math.max(OriginalRenderState.StreamingMinRadius or 64, 4096)
 			Workspace.StreamingTargetRadius = math.max(OriginalRenderState.StreamingTargetRadius or 256, 8192)
 			Workspace.StreamingMaxRadius = math.max(OriginalRenderState.StreamingMaxRadius or 1024, 100000)
-			if Workspace.StreamingEnabled then
-				pcall(function()
-					Workspace.StreamingEnabled = false
-				end)
-			end
 		end)
 		pcall(function()
 			if LocalPlayer then
@@ -226,11 +218,6 @@ local function applyFarRenderState(enabled)
 		end)
 	else
 		pcall(function()
-			if OriginalRenderState.StreamingEnabled ~= nil then
-				pcall(function()
-					Workspace.StreamingEnabled = OriginalRenderState.StreamingEnabled
-				end)
-			end
 			if OriginalRenderState.StreamingMinRadius ~= nil then
 				Workspace.StreamingMinRadius = OriginalRenderState.StreamingMinRadius
 			end
@@ -466,8 +453,8 @@ local function getAimModeText() return "Aim Mode: " .. tostring(Config.AimMode) 
 local function getTargetPartText() return "Mục tiêu: " .. tostring(Config.TargetPart) end
 local function getHeadshotChanceText() return "Tỷ lệ HS (Random): " .. tostring(Config.HeadshotChance) .. "%" end
 local function getMaxDistText()
-	if Config.MaxDistance <= 0 then return "Tầm bắn: Không giới hạn (0-1000m+)" end
-	return "Tầm bắn: " .. tostring(Config.MaxDistance) .. "m"
+	if Config.MaxDistance <= 0 then return "Tầm bắn: Liền mạch (0-1000m+)" end
+	return "Tầm bắn: " .. tostring(Config.MaxDistance) .. "m (0-1000m)"
 end
 local function getAutoSmartText() return Config.AutoSmartAim and "Siêu đoán hướng: BẬT" or "Siêu đoán hướng: TẮT" end
 local function getNoRecoilText() return Config.NoRecoil and "Không rung tâm: BẬT" or "Không rung tâm: TẮT" end
@@ -607,11 +594,6 @@ local function isLocalPlayerOnVehicleOrMovingPlatform()
 			local rootVel = rootAssembly.AssemblyLinearVelocity
 			if isFiniteVector3(rootVel) and rootVel.Magnitude > 4 then return true end
 		end
-		local hrpVel = hrp.AssemblyLinearVelocity
-		local moveMag = hum and hum.MoveDirection.Magnitude or 0
-		if isFiniteVector3(hrpVel) and moveMag < 0.08 and hrpVel.Magnitude > 5.5 then
-			return true
-		end
 	end
 	return false
 end
@@ -630,19 +612,6 @@ local function isTargetOnVehicleOrMovingPlatform(model, part, hum)
 	if not model then return false end
 	if hum and (hum.Sit or (hum.SeatPart and hum.SeatPart:IsA("BasePart"))) then
 		return true
-	end
-	local hrp = model:FindFirstChild("HumanoidRootPart")
-	if hrp and hrp:IsA("BasePart") then
-		local vel = hrp.AssemblyLinearVelocity
-		if isFiniteVector3(vel) and hum and hum.MoveDirection.Magnitude < 0.05 and vel.Magnitude > 4 then
-			return true
-		end
-	end
-	if part and part:IsA("BasePart") then
-		local rootAssembly = part:GetRootPart()
-		if rootAssembly and rootAssembly ~= part and isFiniteVector3(rootAssembly.AssemblyLinearVelocity) then
-			if rootAssembly.AssemblyLinearVelocity.Magnitude > 5 then return true end
-		end
 	end
 	return false
 end
@@ -899,17 +868,57 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
+local function triggerAsyncNpcScan()
+	if isScanningNpc or not shouldTargetNpcs() then return end
+	isScanningNpc = true
+	task.spawn(function()
+		local newEntries = {}
+		local myChar = LocalPlayer.Character
+		pcall(function()
+			for _, obj in ipairs(Workspace:GetChildren()) do
+				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
+					local hum = obj:FindFirstChildOfClass("Humanoid")
+					if hum and hum.Health > 0 then
+						table.insert(newEntries, { model = obj, hum = hum })
+					end
+				end
+			end
+			if #newEntries == 0 or Config.FarRender then
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
+						local hum = obj:FindFirstChildOfClass("Humanoid")
+						if hum and hum.Health > 0 then
+							table.insert(newEntries, { model = obj, hum = hum })
+						end
+					end
+				end
+			end
+		end)
+		CachedNpcEntries = newEntries
+		isScanningNpc = false
+	end)
+end
+
 local function updateESPVisuals(cam, originPos)
-	if not ESPContainer or not cam or not isFiniteVector3(cam.CFrame.Position) then
+	if not ESPContainer then
+		hideUnusedEspEntries(1)
+		return
+	end
+	if not cam or not isFiniteVector3(cam.CFrame.Position) then
 		hideUnusedEspEntries(1)
 		return
 	end
 	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance) then
+		ESPContainer.Visible = false
 		hideUnusedEspEntries(1)
 		return
 	end
 
+	if ScreenGui and not ScreenGui.Parent then
+		mountGui(ScreenGui)
+	end
 	ESPContainer.Visible = true
+
 	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 1000, 150, 5000)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
@@ -919,9 +928,6 @@ local function updateESPVisuals(cam, originPos)
 
 	local candidates = {}
 	local seenModels = {}
-	if shouldTargetPlayers() or shouldTargetNpcs() then
-		rebuildPlayerCharacterSet()
-	end
 
 	if shouldTargetPlayers() then
 		for _, player in ipairs(Players:GetPlayers()) do
@@ -968,49 +974,25 @@ local function updateESPVisuals(cam, originPos)
 			local distStuds = (anchor.Position - originPos).Magnitude
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
-			if distStuds <= maxEspDist or distMeters <= maxEspDist then
-				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
-					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
-					or (anchor.Position + Vector3.new(0, 2.8, 0))
-				local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
+			if distStuds <= math.max(maxEspDist, 1000) or distMeters <= maxEspDist then
+				local rootPt, onRoot = cam:WorldToViewportPoint(anchor.Position)
+				local rx, ry, rz = rootPt.X, rootPt.Y, rootPt.Z
 
-				local topScreen = cam:WorldToViewportPoint(topWorld)
-				local botScreen = cam:WorldToViewportPoint(bottomWorld)
-
-				local topX, topY, topZ = topScreen.X, topScreen.Y, topScreen.Z
-				local botX, botY, botZ = botScreen.X, botScreen.Y, botScreen.Z
-
-				if isFiniteNumber(topX) and isFiniteNumber(topY) and isFiniteNumber(topZ)
-					and isFiniteNumber(botX) and isFiniteNumber(botY) and isFiniteNumber(botZ)
-					and (topZ > 0 or botZ > 0) then
-
-					if topZ < 0 then
-						topY = math.clamp(vp.Y - topY, 0, vp.Y)
-						topX = math.clamp(vp.X - topX, 0, vp.X)
-					end
-					if botZ < 0 then
-						botY = math.clamp(vp.Y - botY, 0, vp.Y)
-						botX = math.clamp(vp.X - botX, 0, vp.X)
-					end
-
-					local boxHeight = math.clamp(math.abs(botY - topY), 16, vp.Y * 0.9)
-					local boxWidth = math.clamp(boxHeight * 0.56, 12, vp.X * 0.6)
-					local centerX = (topX + botX) * 0.5
-					local minY = math.min(topY, botY)
-					local boxLeft = math.floor(centerX - boxWidth * 0.5)
-					local boxTop = math.floor(minY)
+				if onRoot and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.05 then
+					local boxHeight = math.clamp(920 / math.max(rz, 1.2), 20, vp.Y * 0.75)
+					local boxWidth = math.clamp(boxHeight * 0.58, 14, vp.X * 0.45)
+					local boxLeft = math.floor(rx - boxWidth * 0.5)
+					local boxTop = math.floor(ry - boxHeight * 0.5)
 					local boxW = math.floor(boxWidth)
 					local boxH = math.floor(boxHeight)
 
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
 					if entry then
-						local isBlocked = false
-						if Config.ESPWallCheck then
-							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
-							isBlocked = blockedFlag
+						local boxColor = COLOR_ESP_CLEAR_GREEN
+						if Config.ESPWallCheck and CachedTarget and CachedTarget.Parent == model and CachedIsWallBlocked and not CachedBypassWall then
+							boxColor = COLOR_ESP_WALL_WHITE
 						end
-						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
 
 						if entry.box then
 							if Config.ESPBox then
@@ -1587,10 +1569,10 @@ pcall(function()
 		HeadshotChanceBtn.Text = getHeadshotChanceText()
 	end)
 	MaxDistBtn.MouseButton1Click:Connect(function()
-		if Config.MaxDistance == 0 then Config.MaxDistance = 250
+		if Config.MaxDistance == 1000 then Config.MaxDistance = 0
+		elseif Config.MaxDistance == 0 then Config.MaxDistance = 250
 		elseif Config.MaxDistance == 250 then Config.MaxDistance = 500
-		elseif Config.MaxDistance == 500 then Config.MaxDistance = 1000
-		else Config.MaxDistance = 0 end
+		else Config.MaxDistance = 1000 end
 		MaxDistBtn.Text = getMaxDistText()
 	end)
 	AutoSmartBtn.MouseButton1Click:Connect(function()
@@ -1681,7 +1663,7 @@ pcall(function()
 		updateFOVVisual()
 	end)
 	FOVPlus.MouseButton1Click:Connect(function()
-		Config.FOVRadius = math.min(450, Config.FOVRadius + 15)
+		Config.FOVRadius = math.min(800, Config.FOVRadius + 15)
 		updateFOVVisual()
 	end)
 
@@ -1747,37 +1729,6 @@ local function getOriginPosition(cam)
 	return Vector3.zero
 end
 
-local function triggerAsyncNpcScan()
-	if isScanningNpc or not shouldTargetNpcs() then return end
-	isScanningNpc = true
-	task.spawn(function()
-		local newEntries = {}
-		local myChar = LocalPlayer.Character
-		pcall(function()
-			for _, obj in ipairs(Workspace:GetChildren()) do
-				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
-					local hum = obj:FindFirstChildOfClass("Humanoid")
-					if hum and hum.Health > 0 then
-						table.insert(newEntries, { model = obj, hum = hum })
-					end
-				end
-			end
-			if #newEntries == 0 or Config.FarRender then
-				for _, obj in ipairs(Workspace:GetDescendants()) do
-					if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
-						local hum = obj:FindFirstChildOfClass("Humanoid")
-						if hum and hum.Health > 0 then
-							table.insert(newEntries, { model = obj, hum = hum })
-						end
-					end
-				end
-			end
-		end)
-		CachedNpcEntries = newEntries
-		isScanningNpc = false
-	end)
-end
-
 local function estimateTargetVelocity(part, dt, distance)
 	if not part or not part:IsA("BasePart") or not isFiniteVector3(part.Position) then
 		return Vector3.zero
@@ -1809,23 +1760,19 @@ local function computePredictedPosition(origin, part, velocity)
 		return basePos
 	end
 	local dist = (basePos - origin).Magnitude
-	if dist <= 7 then
-		return basePos
-	end
 	local moveSpeed = isFiniteVector3(velocity) and velocity.Magnitude or 0
-	if moveSpeed < 2.5 then return basePos end
+	if moveSpeed < 1.5 then return basePos end
 
-	local nearScale = math.clamp((dist - 18) / 45, 0, 1)
-	if nearScale <= 0.05 then return basePos end
-
+	local continuousScale = math.clamp(dist / 1000, 0.01, 1)
 	local effectiveSpeed = math.max(350, tonumber(Config.BulletSpeed) or 950)
 	local rawLead = dist / effectiveSpeed
-	local maxLead = math.min(tonumber(Config.MaxLeadTime) or 0.24, 0.22)
-	local leadTime = math.clamp(rawLead * nearScale * 0.75, 0, maxLead)
+	local maxLead = math.min(tonumber(Config.MaxLeadTime) or 0.24, 0.24)
+	local leadTime = math.clamp(rawLead * continuousScale, 0, maxLead)
 
 	local predicted = basePos + (velocity * leadTime)
-	if (predicted - basePos).Magnitude > 4.5 then
-		predicted = basePos + (predicted - basePos).Unit * 4.5
+	local maxOffset = math.clamp(dist * 0.05, 0.25, 6)
+	if (predicted - basePos).Magnitude > maxOffset then
+		predicted = basePos + (predicted - basePos).Unit * maxOffset
 	end
 	return isFiniteVector3(predicted) and predicted or basePos
 end
@@ -1846,155 +1793,11 @@ local function isWithinMaxDistance(origin, part)
 	return dist <= math.max(Config.MaxDistance, 1000)
 end
 
-local function isModelInTriggerFOV(model, hum, cam, originPos, centerX, centerY, radius)
-	if not model or not hum or hum.Health <= 0 then return false end
-	local checkParts = {
-		model:FindFirstChild("Head"),
-		model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso"),
-		model:FindFirstChild("HumanoidRootPart")
-	}
-	for _, p in ipairs(checkParts) do
-		if p and p:IsA("BasePart") and isFiniteVector3(p.Position) and isWithinMaxDistance(originPos, p) then
-			local worldPt = p.Position
-			if CachedTarget == p and CachedAimPos and isFiniteVector3(CachedAimPos) then
-				worldPt = CachedAimPos
-			end
-			local screenPos, onScreen = cam:WorldToViewportPoint(worldPt)
-			if onScreen and isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
-				local dx = screenPos.X - centerX
-				local dy = screenPos.Y - centerY
-				if math.sqrt(dx * dx + dy * dy) <= radius then
-					if not Config.TriggerBotWallCheck then
-						return true
-					end
-					if isTargetOnVehicleOrMovingPlatform(model, p, hum) then
-						return true
-					end
-					local rayDelta = worldPt - cam.CFrame.Position
-					if rayDelta.Magnitude > 0.01 then
-						SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
-						local okWall, wallHit = pcall(function()
-							return Workspace:Raycast(cam.CFrame.Position, rayDelta, SharedWallParams)
-						end)
-						if okWall and (wallHit == nil or isGhostOrNonSolidPart(wallHit.Instance)) then
-							return true
-						end
-					end
-				end
-			end
-		end
-	end
-	return false
-end
-
-local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
-	if not cam then return false end
-	local vp = cam.ViewportSize
-	local centerX = vp.X * 0.5
-	local centerY = vp.Y * 0.5
-	local radius = math.clamp(tonumber(trigFOV) or 6, 1, 10)
-
-	if shouldTargetPlayers() or shouldTargetNpcs() then
-		rebuildPlayerCharacterSet()
-	end
-
-	if shouldTargetPlayers() then
-		for _, player in ipairs(Players:GetPlayers()) do
-			if isEnemyPlayer(player) then
-				local char = player.Character
-				local hum = char and char:FindFirstChildOfClass("Humanoid")
-				if hum and isModelInTriggerFOV(char, hum, cam, originPos, centerX, centerY, radius) then
-					return true
-				end
-			end
-		end
-	end
-
-	if shouldTargetNpcs() then
-		local checkedModels = {}
-		for _, entry in ipairs(CachedNpcEntries) do
-			local npcModel = entry.model
-			local hum = entry.hum
-			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
-				checkedModels[npcModel] = true
-				if isModelInTriggerFOV(npcModel, hum, cam, originPos, centerX, centerY, radius) then
-					return true
-				end
-			end
-		end
-		for _, obj in ipairs(Workspace:GetChildren()) do
-			if obj:IsA("Model") and not checkedModels[obj] and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character then
-				local hum = obj:FindFirstChildOfClass("Humanoid")
-				if hum and hum.Health > 0 and isModelInTriggerFOV(obj, hum, cam, originPos, centerX, centerY, radius) then
-					return true
-				end
-			end
-		end
-	end
-
-	return false
-end
-
-local function fireToolEventsIfPresent(tool)
-	if not tool then return false end
-	local triggered = false
-	for _, desc in ipairs(tool:GetDescendants()) do
-		local lower = string.lower(desc.Name or "")
-		if string.find(lower, "fire", 1, true) or string.find(lower, "shoot", 1, true) or string.find(lower, "activate", 1, true) or string.find(lower, "trigger", 1, true) then
-			if desc:IsA("RemoteEvent") then
-				pcall(function()
-					desc:FireServer()
-					triggered = true
-				end)
-			elseif desc:IsA("BindableEvent") then
-				pcall(function()
-					desc:Fire()
-					triggered = true
-				end)
-			end
-		end
-	end
-	return triggered
-end
-
-local function pulseTriggerFire()
-	if isTriggerBurstBusy then return end
-	if elapsedClock - lastTriggerFireTime < 0.08 then return end
-
-	lastTriggerFireTime = elapsedClock
-	isTriggerBurstBusy = true
-
-	local char = LocalPlayer.Character
-	local tool = char and char:FindFirstChildOfClass("Tool")
-	if tool and type(tool.Activate) == "function" then
-		pcall(function() tool:Activate() end)
-	end
-
-	fireToolEventsIfPresent(tool)
-
-	if VirtualInputManager then
-		local cam = Workspace.CurrentCamera
-		local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-		local clickX = math.floor(vp.X * 0.5)
-		local clickY = math.floor(vp.Y * 0.5)
-		pcall(function()
-			VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
-		end)
-		task.delay(0.03, function()
-			pcall(function()
-				VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
-			end)
-		end)
-	end
-
-	isTriggerBurstBusy = false
-end
-
 local function isWithinSafeServerAngle(cam, worldPos)
 	if not Config.SafeAngleClamp or not cam then return true end
 	local lookDir = cam.CFrame.LookVector
 	local toTarget = worldPos - cam.CFrame.Position
-	if toTarget.Magnitude <= 7 then return true end
+	if toTarget.Magnitude <= 1e-4 then return true end
 	local dot = math.clamp(lookDir.Unit:Dot(toTarget.Unit), -1, 1)
 	local angleDeg = math.deg(math.acos(dot))
 	local limitDeg = math.clamp(tonumber(Config.MaxSafeAngleDeg) or 180, 1, 180)
@@ -2013,11 +1816,12 @@ local function evaluateCandidateModel(model, hum, cam, originPos, centerX, cente
 		return nil, shortestDistance
 	end
 	local screenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-	if onScreen and isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
+	if isFiniteNumber(screenPos.Z) and screenPos.Z > 0 and isFiniteNumber(screenPos.X) and isFiniteNumber(screenPos.Y) then
 		local dx = screenPos.X - centerX
 		local dy = screenPos.Y - centerY
 		local dist = math.sqrt(dx * dx + dy * dy)
-		if dist <= math.min(shortestDistance, fovLimit) and isClearPathWithWallFlag(model, part, part.Position, hum, wallFlag) then
+		local effectiveFov = math.max(tonumber(fovLimit) or 220, 220)
+		if (onScreen or dist <= effectiveFov) and dist <= math.min(shortestDistance, effectiveFov) and isClearPathWithWallFlag(model, part, part.Position, hum, wallFlag) then
 			return part, dist
 		end
 	end
@@ -2033,12 +1837,10 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	local centerY = vp.Y * 0.5
 	local originPos = getOriginPosition(cam)
 	local closestPart = nil
-	local shortestDistance = fovLimit
+	local shortestDistance = math.max(tonumber(fovLimit) or 220, 220)
 
 	local checkPlayers = shouldTargetPlayers()
 	local checkNpcs = shouldTargetNpcs()
-
-	if checkPlayers or checkNpcs then rebuildPlayerCharacterSet() end
 
 	if checkPlayers then
 		for _, player in ipairs(Players:GetPlayers()) do
@@ -2055,7 +1857,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	end
 
 	if checkNpcs then
-		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 0.6 or 1.2) then
+		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 0.7 or 1.4) then
 			lastNpcScanTime = elapsedClock
 			triggerAsyncNpcScan()
 		end
@@ -2079,7 +1881,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 end
 
 local function updateRainbowUI()
-	if elapsedClock - lastRainbowUpdateTime < 0.03 then return end
+	if elapsedClock - lastRainbowUpdateTime < 0.04 then return end
 	lastRainbowUpdateTime = elapsedClock
 	if isMinimized then
 		if HButtonStroke then HButtonStroke.Color = COLOR_H_BLACK_BORDER end
@@ -2097,12 +1899,17 @@ RunService.RenderStepped:Connect(function(dt)
 	updateRainbowUI()
 
 	pcall(function()
-		if Config.FarRender and (elapsedClock - lastFarRenderSyncTime >= 1.5) then
+		if elapsedClock - lastPlayerSetRebuildTime >= 0.35 then
+			lastPlayerSetRebuildTime = elapsedClock
+			rebuildPlayerCharacterSet()
+		end
+
+		if Config.FarRender and (elapsedClock - lastFarRenderSyncTime >= 1.8) then
 			lastFarRenderSyncTime = elapsedClock
 			applyFarRenderState(true)
 		end
 
-		if elapsedClock - lastSeatCheckTime >= 0.1 then
+		if elapsedClock - lastSeatCheckTime >= 0.15 then
 			lastSeatCheckTime = elapsedClock
 			syncVehicleAutoState()
 		end
@@ -2110,10 +1917,7 @@ RunService.RenderStepped:Connect(function(dt)
 		local cam = Workspace.CurrentCamera
 		local originPos = getOriginPosition(cam)
 
-		if elapsedClock - lastEspRenderTime >= 0.016 then
-			lastEspRenderTime = elapsedClock
-			updateESPVisuals(cam, originPos)
-		end
+		updateESPVisuals(cam, originPos)
 
 		if isSilentActive() then
 			CachedTarget = findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck)
@@ -2129,7 +1933,7 @@ RunService.RenderStepped:Connect(function(dt)
 				CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
 				CachedDistance = rawDist
 
-				if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
+				if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.1) then
 					lastWallCheckTime = elapsedClock
 					CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, targetHum)
 				elseif not Config.WallCheck then
@@ -2155,13 +1959,6 @@ RunService.RenderStepped:Connect(function(dt)
 			prevTargetPos = nil
 			prevTargetVel = nil
 			prevSampleTime = nil
-		end
-
-		if Config.TriggerBot and not pausedByVehicle then
-			local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
-			if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
-				pulseTriggerFire()
-			end
 		end
 
 		if Config.DebugLog then
@@ -2295,47 +2092,32 @@ end)
 
 pcall(function()
 	if not getnamecallmethod then
-		warn("[SilentAimGemini] Executor khong ho tro getnamecallmethod.")
 		return
 	end
 	local oldNamecall
 	oldNamecall = safeHookMetamethod(game, "__namecall", function(self, ...)
-		local okMethod, method = pcall(getnamecallmethod)
-		if okMethod then
-			if Config.AntiKickClient then
-				if method == "Kick" and self == LocalPlayer then
-					logHookHit("Blocked __namecall Kick")
-					return nil
-				end
-				if (method == "FireServer" or method == "InvokeServer") and isSuspiciousClientRemote(self) then
-					if not isCallerOwnScript() then
-						logHookHit("Blocked suspicious remote: " .. tostring(self.Name))
-						return nil
-					end
-				end
+		local method = getnamecallmethod()
+		if Config.AntiKickClient then
+			if method == "Kick" and self == LocalPlayer then
+				return nil
 			end
+			if (method == "FireServer" or method == "InvokeServer") and isSuspiciousClientRemote(self) and not isCallerOwnScript() then
+				return nil
+			end
+		end
 
-			if isSilentActive() and self == Workspace and CachedTarget then
-				local aimPoint = getActiveSilentAimPoint()
-				if aimPoint and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") then
-					if not isCallerOwnScript() then
-						if method == "Raycast" then
-							local args = { ... }
-							local origin, direction = args[1], args[2]
-							if isFiniteVector3(origin) and isFiniteVector3(direction) then
-								args[2] = aimDirection(origin, direction, aimPoint)
-								logHookHit("Workspace:Raycast")
-								return oldNamecall(self, table.unpack(args))
-							end
-						else
-							local args = { ... }
-							local ray = args[1]
-							if typeof(ray) == "Ray" and isFiniteVector3(ray.Origin) and isFiniteVector3(ray.Direction) then
-								args[1] = Ray.new(ray.Origin, aimDirection(ray.Origin, ray.Direction, aimPoint))
-								logHookHit("Workspace:" .. method)
-								return oldNamecall(self, table.unpack(args))
-							end
-						end
+		if isSilentActive() and self == Workspace and CachedTarget and not isCallerOwnScript() then
+			local aimPoint = getActiveSilentAimPoint()
+			if aimPoint then
+				if method == "Raycast" then
+					local origin, direction = ...
+					if isFiniteVector3(origin) and isFiniteVector3(direction) then
+						return oldNamecall(self, origin, aimDirection(origin, direction, aimPoint), select(3, ...))
+					end
+				elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+					local ray = ...
+					if typeof(ray) == "Ray" and isFiniteVector3(ray.Origin) and isFiniteVector3(ray.Direction) then
+						return oldNamecall(self, Ray.new(ray.Origin, aimDirection(ray.Origin, ray.Direction, aimPoint)), select(2, ...))
 					end
 				end
 			end
@@ -2349,14 +2131,12 @@ pcall(function()
 	if Mouse then
 		local oldIndex
 		oldIndex = safeHookMetamethod(Mouse, "__index", function(self, key)
-			if isSilentActive() and self == Mouse and CachedTarget then
+			if isSilentActive() and self == Mouse and CachedTarget and not isCallerOwnScript() then
 				local aimPoint = getActiveSilentAimPoint()
-				if aimPoint and (key == "Hit" or key == "Target" or key == "UnitRay") and (not isCallerOwnScript()) then
+				if aimPoint then
 					if key == "Hit" then
-						logHookHit("Mouse.Hit")
 						return CFrame.new(aimPoint)
 					elseif key == "Target" then
-						logHookHit("Mouse.Target")
 						return CachedTarget
 					elseif key == "UnitRay" then
 						local cam = Workspace.CurrentCamera
@@ -2364,7 +2144,6 @@ pcall(function()
 							local origin = cam.CFrame.Position
 							local delta = aimPoint - origin
 							if isFiniteVector3(delta) and delta.Magnitude > 1e-4 then
-								logHookHit("Mouse.UnitRay")
 								return Ray.new(origin, delta.Unit)
 							end
 						end
