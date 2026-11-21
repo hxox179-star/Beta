@@ -1,5 +1,5 @@
 -- ============================================================================
--- SILENT AIM GEMINI - NO ESP (SAFE UI, SAVE/LOAD, AIMBOT, HOOK)
+-- SILENT AIM GEMINI - ESP + SAFE UI, SAVE/LOAD, AIMBOT, HOOK
 -- ============================================================================
 
 local Players = game:GetService("Players")
@@ -24,7 +24,8 @@ local AIM_TARGET_MODES = { "Player + NPC", "Player", "NPC" }
 local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Random" }
 local HEADSHOT_CHANCE_PRESETS = { 25, 50, 75, 100 }
 local STICKINESS_PRESETS = { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 }
-local TABS = { "Silent Aim", "Aimbot", "Settings" }
+local ESP_DIST_PRESETS = { 150, 250, 350, 500, 1000, 1500 }
+local TABS = { "Silent Aim", "Aimbot", "ESP", "Settings" }
 
 local SAVE_FOLDER = "SilentAimGeminiSaves"
 local AUTO_LOAD_META_FILE = SAVE_FOLDER .. "/autoload_meta.json"
@@ -63,6 +64,12 @@ local function getDefaultConfig()
 		FarRender = false,
 		TriggerBot = false,
 		TriggerBotWallCheck = true,
+		ESPEnabled = true,
+		ESPBox = true,
+		ESPHealthBar = true,
+		ESPDistance = true,
+		ESPWallCheck = true,
+		ESPMaxDistance = 350,
 		AutoLoadEnabled = false,
 		SaveName = "Default",
 		DebugLog = false
@@ -71,14 +78,20 @@ end
 
 local Config = getDefaultConfig()
 
-local ScreenGui, FOVFrame, AimbotFOVFrame, TriggerFOVFrame, FOVLabel, AimbotFOVLabel, TriggerFOVLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
+local ScreenGui, FOVFrame, AimbotFOVFrame, TriggerFOVFrame, ESPContainer, FOVLabel, AimbotFOVLabel, TriggerFOVLabel, ESPDistLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
 local PageFrames = {}
 local TabButtons = {}
-local ToggleSilentBtn, AimEngineBtn, AimbotStickBtn, AimbotWallBtn, ToggleAimbotFOVBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, MaxDistBtn, AutoSmartBtn, NoRecoilBtn, StraightBulletBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
+local ToggleSilentBtn, AimEngineBtn, AimbotStickBtn, AimbotWallBtn, ToggleAimbotFOVBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, MaxDistBtn, AutoSmartBtn, NoRecoilBtn, StraightBulletBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
 local mainStroke
+local EspVisualPool = {}
 
 local COLOR_AIMBOT_RED = Color3.fromRGB(255, 45, 55)
 local COLOR_TRIGGER_AMBER = Color3.fromRGB(255, 190, 35)
+local COLOR_ESP_CLEAR_GREEN = Color3.fromRGB(55, 235, 115)
+local COLOR_ESP_WALL_WHITE = Color3.fromRGB(245, 248, 255)
+local COLOR_HP_HIGH_GREEN = Color3.fromRGB(65, 230, 105)
+local COLOR_HP_MID_ORANGE = Color3.fromRGB(255, 155, 35)
+local COLOR_HP_LOW_RED = Color3.fromRGB(255, 50, 60)
 local COLOR_H_BLACK_BORDER = Color3.fromRGB(10, 10, 12)
 local COLOR_H_ORANGE_TEXT = Color3.fromRGB(255, 140, 0)
 local COLOR_BG_DARK = Color3.fromRGB(24, 25, 28)
@@ -111,6 +124,7 @@ local lastWallCheckTime = 0
 local lastSeatCheckTime = 0
 local lastFarRenderSyncTime = 0
 local lastTriggerFireTime = 0
+local lastEspRenderTime = 0
 local isTriggerBurstBusy = false
 local elapsedClock = 0
 local isScanningNpc = false
@@ -345,6 +359,7 @@ local function applyConfigTable(tbl)
 			Config[k] = tbl[k]
 		end
 	end
+	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
 	userDesiredEnabled = Config.Enabled
 end
 
@@ -485,6 +500,12 @@ local function getSevenFingerText() return Config.SevenFingerGesture and "7 ngó
 local function getFarRenderText() return Config.FarRender and "Nhìn map xa: BẬT" or "Nhìn map xa: TẮT" end
 local function getTriggerBotText() return Config.TriggerBot and "Tự bắn khi chỉ địch: BẬT" or "Tự bắn khi chỉ địch: TẮT" end
 local function getTriggerWallText() return Config.TriggerBotWallCheck and "WallCheck tự bắn: BẬT" or "WallCheck tự bắn: TẮT" end
+local function getESPEnabledText() return Config.ESPEnabled and "ESP Tổng: BẬT" or "ESP Tổng: TẮT" end
+local function getESPBoxText() return Config.ESPBox and "ESP Box 2D: BẬT" or "ESP Box 2D: TẮT" end
+local function getESPHealthText() return Config.ESPHealthBar and "Thanh máu dọc: BẬT" or "Thanh máu dọc: TẮT" end
+local function getESPDistText() return Config.ESPDistance and "ESP Khoảng cách: BẬT" or "ESP Khoảng cách: TẮT" end
+local function getESPWallText() return Config.ESPWallCheck and "WallCheck ESP: BẬT" or "WallCheck ESP: TẮT" end
+local function getESPDistRangeText() return "Khoảng cách ESP: " .. tostring(Config.ESPMaxDistance) .. "m" end
 local function getAutoLoadText() return Config.AutoLoadEnabled and "Auto Load Save: BẬT" or "Auto Load Save: TẮT" end
 local function shouldTargetPlayers() return Config.AimMode == "Player" or Config.AimMode == "Player + NPC" end
 local function shouldTargetNpcs() return Config.AimMode == "NPC" or Config.AimMode == "Player + NPC" end
@@ -515,6 +536,10 @@ local function updateFOVVisual()
 	end
 	if TriggerFOVLabel then
 		TriggerFOVLabel.Text = "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius)
+	end
+	if ESPDistLabel then
+		Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+		ESPDistLabel.Text = getESPDistRangeText()
 	end
 end
 
@@ -576,6 +601,26 @@ local function syncAllUiTexts()
 	if TriggerWallBtn then
 		TriggerWallBtn.Text = getTriggerWallText()
 		TriggerWallBtn.BackgroundColor3 = Config.TriggerBotWallCheck and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if ESPEnabledBtn then
+		ESPEnabledBtn.Text = getESPEnabledText()
+		ESPEnabledBtn.BackgroundColor3 = Config.ESPEnabled and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if ESPBoxBtn then
+		ESPBoxBtn.Text = getESPBoxText()
+		ESPBoxBtn.BackgroundColor3 = Config.ESPBox and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if ESPHealthBtn then
+		ESPHealthBtn.Text = getESPHealthText()
+		ESPHealthBtn.BackgroundColor3 = Config.ESPHealthBar and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if ESPDistBtn then
+		ESPDistBtn.Text = getESPDistText()
+		ESPDistBtn.BackgroundColor3 = Config.ESPDistance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if ESPWallBtn then
+		ESPWallBtn.Text = getESPWallText()
+		ESPWallBtn.BackgroundColor3 = Config.ESPWallCheck and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end
 	if AutoLoadToggleBtn then AutoLoadToggleBtn.Text = getAutoLoadText() end
 	if DebugLogBtn then DebugLogBtn.Text = Config.DebugLog and "Debug Log: BẬT" or "Debug Log: TẮT" end
@@ -753,6 +798,92 @@ local function applyMenuVisibilityAndMinimize()
 	end
 end
 
+local function getOrCreateEspEntry(index)
+	if EspVisualPool[index] then
+		return EspVisualPool[index]
+	end
+	if not ESPContainer then return nil end
+
+	local boxFrame = Instance.new("Frame")
+	boxFrame.Name = "EspBox_" .. tostring(index)
+	boxFrame.BackgroundTransparency = 1
+	boxFrame.BorderSizePixel = 0
+	boxFrame.Visible = false
+	boxFrame.Active = false
+	boxFrame.ZIndex = 4
+	boxFrame.Parent = ESPContainer
+
+	local boxStroke = Instance.new("UIStroke")
+	boxStroke.Color = COLOR_ESP_CLEAR_GREEN
+	boxStroke.Thickness = 1.6
+	boxStroke.Parent = boxFrame
+
+	local hpBg = Instance.new("Frame")
+	hpBg.Name = "EspHpBg_" .. tostring(index)
+	hpBg.BackgroundColor3 = Color3.fromRGB(15, 16, 20)
+	hpBg.BackgroundTransparency = 0.25
+	hpBg.BorderSizePixel = 0
+	hpBg.Visible = false
+	hpBg.Active = false
+	hpBg.ZIndex = 4
+	hpBg.Parent = ESPContainer
+
+	local hpFill = Instance.new("Frame")
+	hpFill.Name = "EspHpFill_" .. tostring(index)
+	hpFill.BackgroundColor3 = COLOR_HP_HIGH_GREEN
+	hpFill.BorderSizePixel = 0
+	hpFill.Size = UDim2.new(1, 0, 1, 0)
+	hpFill.Position = UDim2.new(0, 0, 0, 0)
+	hpFill.Active = false
+	hpFill.ZIndex = 5
+	hpFill.Parent = hpBg
+
+	local distLabel = Instance.new("TextLabel")
+	distLabel.Name = "EspDist_" .. tostring(index)
+	distLabel.BackgroundTransparency = 1
+	distLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
+	distLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
+	distLabel.TextStrokeTransparency = 0.15
+	distLabel.Font = Enum.Font.GothamBold
+	distLabel.TextSize = 11
+	distLabel.Text = ""
+	distLabel.Visible = false
+	distLabel.Active = false
+	distLabel.ZIndex = 5
+	distLabel.Parent = ESPContainer
+
+	local entry = {
+		box = boxFrame,
+		stroke = boxStroke,
+		hpBg = hpBg,
+		hpFill = hpFill,
+		dist = distLabel
+	}
+	EspVisualPool[index] = entry
+	return entry
+end
+
+local function hideUnusedEspEntries(startIndex)
+	for i = startIndex, #EspVisualPool do
+		local entry = EspVisualPool[i]
+		if entry then
+			if entry.box then entry.box.Visible = false end
+			if entry.hpBg then entry.hpBg.Visible = false end
+			if entry.dist then entry.dist.Visible = false end
+		end
+	end
+end
+
+local function getHealthColor(ratio)
+	if ratio > 0.6 then
+		return COLOR_HP_HIGH_GREEN
+	elseif ratio >= 0.3 then
+		return COLOR_HP_MID_ORANGE
+	else
+		return COLOR_HP_LOW_RED
+	end
+end
+
 pcall(function()
 	ScreenGui = Instance.new("ScreenGui")
 	ScreenGui.Name = "SilentAimGeminiGUI"
@@ -760,6 +891,16 @@ pcall(function()
 	ScreenGui.IgnoreGuiInset = true
 	ScreenGui.DisplayOrder = 999999
 	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+	ESPContainer = Instance.new("Frame")
+	ESPContainer.Name = "ESPContainer"
+	ESPContainer.Size = UDim2.new(1, 0, 1, 0)
+	ESPContainer.Position = UDim2.new(0, 0, 0, 0)
+	ESPContainer.BackgroundTransparency = 1
+	ESPContainer.Visible = true
+	ESPContainer.Active = false
+	ESPContainer.ZIndex = 1
+	ESPContainer.Parent = ScreenGui
 
 	FOVFrame = Instance.new("Frame")
 	FOVFrame.Name = "CenterFOV"
@@ -769,7 +910,7 @@ pcall(function()
 	FOVFrame.BackgroundTransparency = 1
 	FOVFrame.Visible = false
 	FOVFrame.Active = false
-	FOVFrame.ZIndex = 1
+	FOVFrame.ZIndex = 2
 	FOVFrame.Parent = ScreenGui
 
 	local fovCorner = Instance.new("UICorner")
@@ -789,7 +930,7 @@ pcall(function()
 	AimbotFOVFrame.BackgroundTransparency = 1
 	AimbotFOVFrame.Visible = false
 	AimbotFOVFrame.Active = false
-	AimbotFOVFrame.ZIndex = 2
+	AimbotFOVFrame.ZIndex = 3
 	AimbotFOVFrame.Parent = ScreenGui
 
 	local aimFovCorner = Instance.new("UICorner")
@@ -809,7 +950,7 @@ pcall(function()
 	TriggerFOVFrame.BackgroundTransparency = 1
 	TriggerFOVFrame.Visible = false
 	TriggerFOVFrame.Active = false
-	TriggerFOVFrame.ZIndex = 3
+	TriggerFOVFrame.ZIndex = 4
 	TriggerFOVFrame.Parent = ScreenGui
 
 	local trigFovCorner = Instance.new("UICorner")
@@ -919,7 +1060,7 @@ pcall(function()
 	end)
 
 	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseButton1 then
 			dragging = false
 		end
 	end)
@@ -1129,7 +1270,17 @@ pcall(function()
 	local AimFOVMinus, AimFOVPlus
 	AimbotFOVLabel, AimFOVMinus, AimFOVPlus = createStepper(aimbotPage, "FOV Aimbot: " .. tostring(Config.AimbotFOVRadius), "-10", "+10", Color3.fromRGB(255, 115, 125), 5)
 
-	-- TAB 3: SETTINGS
+	-- TAB 3: ESP
+	local espPage = PageFrames["ESP"]
+	ESPEnabledBtn = createButton(espPage, getESPEnabledText(), 1)
+	ESPBoxBtn = createButton(espPage, getESPBoxText(), 2)
+	ESPHealthBtn = createButton(espPage, getESPHealthText(), 3)
+	ESPDistBtn = createButton(espPage, getESPDistText(), 4)
+	ESPWallBtn = createButton(espPage, getESPWallText(), 5)
+	local ESPDistMinus, ESPDistPlus
+	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-150", "+150", Color3.fromRGB(140, 235, 165), 6)
+
+	-- TAB 4: SETTINGS
 	local settingsPage = PageFrames["Settings"]
 	AntiKickBtn = createButton(settingsPage, getAntiKickText(), 1)
 	SafeAngleBtn = createButton(settingsPage, getSafeAngleText(), 2)
@@ -1239,6 +1390,40 @@ pcall(function()
 	ToggleTriggerFOVBtn.MouseButton1Click:Connect(function()
 		Config.ShowTriggerFOV = not Config.ShowTriggerFOV
 		ToggleTriggerFOVBtn.Text = getToggleTriggerFOVText()
+		updateFOVVisual()
+	end)
+	ESPEnabledBtn.MouseButton1Click:Connect(function()
+		Config.ESPEnabled = not Config.ESPEnabled
+		ESPEnabledBtn.Text = getESPEnabledText()
+		ESPEnabledBtn.BackgroundColor3 = Config.ESPEnabled and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+		if not Config.ESPEnabled then hideUnusedEspEntries(1) end
+	end)
+	ESPBoxBtn.MouseButton1Click:Connect(function()
+		Config.ESPBox = not Config.ESPBox
+		ESPBoxBtn.Text = getESPBoxText()
+		ESPBoxBtn.BackgroundColor3 = Config.ESPBox and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end)
+	ESPHealthBtn.MouseButton1Click:Connect(function()
+		Config.ESPHealthBar = not Config.ESPHealthBar
+		ESPHealthBtn.Text = getESPHealthText()
+		ESPHealthBtn.BackgroundColor3 = Config.ESPHealthBar and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end)
+	ESPDistBtn.MouseButton1Click:Connect(function()
+		Config.ESPDistance = not Config.ESPDistance
+		ESPDistBtn.Text = getESPDistText()
+		ESPDistBtn.BackgroundColor3 = Config.ESPDistance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end)
+	ESPWallBtn.MouseButton1Click:Connect(function()
+		Config.ESPWallCheck = not Config.ESPWallCheck
+		ESPWallBtn.Text = getESPWallText()
+		ESPWallBtn.BackgroundColor3 = Config.ESPWallCheck and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end)
+	ESPDistMinus.MouseButton1Click:Connect(function()
+		Config.ESPMaxDistance = math.max(150, (tonumber(Config.ESPMaxDistance) or 350) - 150)
+		updateFOVVisual()
+	end)
+	ESPDistPlus.MouseButton1Click:Connect(function()
+		Config.ESPMaxDistance = math.min(1500, (tonumber(Config.ESPMaxDistance) or 350) + 150)
 		updateFOVVisual()
 	end)
 	AntiKickBtn.MouseButton1Click:Connect(function()
@@ -1801,8 +1986,9 @@ local function checkWallOcclusion(model, targetPart, aimPos, hum)
 	local ok, result = pcall(function()
 		return Workspace:Raycast(origin, direction, SharedWallParams)
 	end)
-	if not ok then return false, false end
-	return result ~= nil, false
+	if not ok or not result or not result.Instance then return false, false end
+	if isGhostOrNonSolidPart(result.Instance) then return false, false end
+	return true, false
 end
 
 local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
@@ -1810,6 +1996,146 @@ local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
 	local isBlocked, bypassWall = checkWallOcclusion(model, targetPart, aimPos, hum)
 	if bypassWall then return true end
 	return not isBlocked
+end
+
+local function updateESPVisuals(cam, originPos)
+	if not ESPContainer or not cam or not isFiniteVector3(cam.CFrame.Position) then
+		hideUnusedEspEntries(1)
+		return
+	end
+	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance) then
+		hideUnusedEspEntries(1)
+		return
+	end
+
+	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	local vp = cam.ViewportSize
+	if vp.X <= 0 or vp.Y <= 0 then
+		hideUnusedEspEntries(1)
+		return
+	end
+
+	local candidates = {}
+	if shouldTargetPlayers() or shouldTargetNpcs() then
+		rebuildPlayerCharacterSet()
+	end
+
+	if shouldTargetPlayers() then
+		for _, player in ipairs(Players:GetPlayers()) do
+			if isEnemyPlayer(player) then
+				local char = player.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if char and hum and hum.Health > 0 then
+					table.insert(candidates, { model = char, hum = hum })
+				end
+			end
+		end
+	end
+
+	if shouldTargetNpcs() then
+		for _, entry in ipairs(CachedNpcEntries) do
+			local npcModel = entry.model
+			local hum = entry.hum
+			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
+				table.insert(candidates, { model = npcModel, hum = hum })
+			end
+		end
+	end
+
+	local visualIndex = 0
+	for _, item in ipairs(candidates) do
+		local model = item.model
+		local hum = item.hum
+		local hrp = model:FindFirstChild("HumanoidRootPart")
+		local head = model:FindFirstChild("Head")
+		local anchor = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
+
+		if anchor and isFiniteVector3(anchor.Position) then
+			local distStuds = (anchor.Position - originPos).Magnitude
+			local distMeters = math.floor(distStuds * 0.28 + 0.5)
+			local effectiveDist = math.max(distStuds, distMeters)
+
+			if effectiveDist <= maxEspDist then
+				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
+					and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
+					or (anchor.Position + Vector3.new(0, 2.8, 0))
+				local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
+
+				local topScreen, topOnScreen = cam:WorldToViewportPoint(topWorld)
+				local botScreen, botOnScreen = cam:WorldToViewportPoint(bottomWorld)
+
+				if (topOnScreen or botOnScreen)
+					and isFiniteNumber(topScreen.Z) and isFiniteNumber(botScreen.Z)
+					and (topScreen.Z > 0 or botScreen.Z > 0)
+					and isFiniteNumber(topScreen.X) and isFiniteNumber(topScreen.Y)
+					and isFiniteNumber(botScreen.X) and isFiniteNumber(botScreen.Y) then
+
+					local boxHeight = math.clamp(math.abs(botScreen.Y - topScreen.Y), 14, vp.Y * 0.9)
+					local boxWidth = math.clamp(boxHeight * 0.56, 10, vp.X * 0.6)
+					local centerX = (topScreen.X + botScreen.X) * 0.5
+					local minY = math.min(topScreen.Y, botScreen.Y)
+					local boxLeft = math.floor(centerX - boxWidth * 0.5)
+					local boxTop = math.floor(minY)
+					local boxW = math.floor(boxWidth)
+					local boxH = math.floor(boxHeight)
+
+					visualIndex = visualIndex + 1
+					local entry = getOrCreateEspEntry(visualIndex)
+					if entry then
+						local isBlocked = false
+						if Config.ESPWallCheck then
+							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
+							isBlocked = blockedFlag
+						end
+						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
+
+						if entry.box then
+							if Config.ESPBox then
+								entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
+								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
+								if entry.stroke then
+									entry.stroke.Color = boxColor
+								end
+								entry.box.Visible = true
+							else
+								entry.box.Visible = false
+							end
+						end
+
+						if entry.hpBg and entry.hpFill then
+							if Config.ESPHealthBar then
+								local maxHp = math.max(1, tonumber(hum.MaxHealth) or 100)
+								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
+								local barW = 4
+								local barLeft = boxLeft - barW - 3
+								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
+								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
+								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
+								entry.hpFill.Position = UDim2.new(0, 0, 1 - hpRatio, 0)
+								entry.hpFill.BackgroundColor3 = getHealthColor(hpRatio)
+								entry.hpBg.Visible = true
+							else
+								entry.hpBg.Visible = false
+							end
+						end
+
+						if entry.dist then
+							if Config.ESPDistance then
+								entry.dist.Text = tostring(distMeters) .. "m"
+								entry.dist.Position = UDim2.new(0, boxLeft, 0, boxTop + boxH + 2)
+								entry.dist.Size = UDim2.new(0, boxW, 0, 14)
+								entry.dist.Visible = true
+							else
+								entry.dist.Visible = false
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	hideUnusedEspEntries(visualIndex + 1)
 end
 
 local function isWithinSafeServerAngle(cam, worldPos)
@@ -1951,6 +2277,11 @@ RunService.RenderStepped:Connect(function(dt)
 
 		local cam = Workspace.CurrentCamera
 		local originPos = getOriginPosition(cam)
+
+		if elapsedClock - lastEspRenderTime >= 0.02 then
+			lastEspRenderTime = elapsedClock
+			updateESPVisuals(cam, originPos)
+		end
 
 		if isSilentActive() then
 			CachedTarget = usesSilentAim() and findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck) or nil
