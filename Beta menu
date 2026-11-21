@@ -124,6 +124,7 @@ local lastSeatCheckTime = 0
 local lastFarRenderSyncTime = 0
 local lastTriggerFireTime = 0
 local lastEspRenderTime = 0
+local lastAimScanTime = 0
 local lastPlayerSetRebuildTime = 0
 local isTriggerBurstBusy = false
 local elapsedClock = 0
@@ -475,10 +476,6 @@ end
 
 local function isAutoRangeEnabled()
 	return (tonumber(Config.MaxDistance) or 0) <= 0
-end
-
-local function metersToStuds(meters)
-	return math.max(0, tonumber(meters) or 0) * STUDS_PER_METER
 end
 
 local function studsToMeters(studs)
@@ -1977,7 +1974,7 @@ local function isWithinMaxDistance(origin, part, customMaxMeters)
 	local distMeters = studsToMeters(distStuds)
 
 	if customMaxMeters ~= nil then
-		return distMeters <= customMaxMeters
+		return distMeters >= AUTO_RANGE_MIN_METERS and distMeters <= customMaxMeters
 	end
 
 	if isAutoRangeEnabled() then
@@ -1985,7 +1982,7 @@ local function isWithinMaxDistance(origin, part, customMaxMeters)
 	end
 
 	local limitMeters = math.clamp(tonumber(Config.MaxDistance) or AUTO_RANGE_MAX_METERS, AUTO_RANGE_MIN_METERS, AUTO_RANGE_MAX_METERS)
-	return distMeters <= limitMeters
+	return distMeters >= AUTO_RANGE_MIN_METERS and distMeters <= limitMeters
 end
 
 local function isModelInTriggerFOV(model, hum, cam, originPos, centerX, centerY, radius)
@@ -2202,6 +2199,12 @@ local function scanCandidatesAtRange(cam, originPos, centerX, centerY, partPicke
 	return closestPart
 end
 
+-- Các mốc dò tăng dần từ nhỏ đến lớn 1 -> 1000m (mượt mà, không rớt FPS)
+local AUTO_RANGE_STEPS = {
+	1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 65, 80, 100,
+	125, 150, 180, 220, 260, 300, 350, 400, 460, 520, 600, 700, 800, 900, 1000
+}
+
 local function findBestTarget(partPicker, fovLimit, wallFlag)
 	local cam = Workspace.CurrentCamera
 	if not cam then
@@ -2214,26 +2217,21 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	local centerY = vp.Y * 0.5
 	local originPos = getOriginPosition(cam)
 
-	if shouldTargetNpcs() and (elapsedClock - lastNpcScanTime >= (Config.FarRender and 0.6 or 1.2)) then
+	if shouldTargetNpcs() and (elapsedClock - lastNpcScanTime >= (Config.FarRender and 0.65 or 1.35)) then
 		lastNpcScanTime = elapsedClock
 		triggerAsyncNpcScan()
 	end
 
-	-- Quét tuần tự theo số tăng dần từ 1m -> 1000m (1, 2, 3, ... 1000) để khóa đầu đúng tầm khoảng cách
+	-- Quét tăng dần từng nấc 1 -> 1000m vào đầu, luôn bật kiểm tra đường ngắm để không trúng dame ảo
 	if isAutoRangeEnabled() then
-		local stepOffset = math.floor(elapsedClock) % 25
-		for m = AUTO_RANGE_MIN_METERS, AUTO_RANGE_MAX_METERS do
-			local probeMeters = m
-			if m > 60 then
-				probeMeters = math.min(AUTO_RANGE_MAX_METERS, m + stepOffset)
-			end
-			local hitPart = scanCandidatesAtRange(cam, originPos, centerX, centerY, partPicker, fovLimit, true, probeMeters)
+		for _, stepMeters in ipairs(AUTO_RANGE_STEPS) do
+			local hitPart = scanCandidatesAtRange(cam, originPos, centerX, centerY, partPicker, fovLimit, true, stepMeters)
 			if hitPart then
-				CachedMatchedMeter = studsToMeters((hitPart.Position - originPos).Magnitude)
-				return hitPart
-			end
-			if probeMeters >= AUTO_RANGE_MAX_METERS then
-				break
+				local exactMeters = studsToMeters((hitPart.Position - originPos).Magnitude)
+				if exactMeters >= AUTO_RANGE_MIN_METERS and exactMeters <= AUTO_RANGE_MAX_METERS then
+					CachedMatchedMeter = exactMeters
+					return hitPart
+				end
 			end
 		end
 		CachedMatchedMeter = 0
@@ -2265,7 +2263,7 @@ RunService.RenderStepped:Connect(function(dt)
 	updateRainbowUI()
 
 	pcall(function()
-		if elapsedClock - lastPlayerSetRebuildTime >= 0.25 then
+		if elapsedClock - lastPlayerSetRebuildTime >= 0.3 then
 			lastPlayerSetRebuildTime = elapsedClock
 			rebuildPlayerCharacterSet()
 		end
@@ -2275,7 +2273,7 @@ RunService.RenderStepped:Connect(function(dt)
 			applyFarRenderState(true)
 		end
 
-		if elapsedClock - lastSeatCheckTime >= 0.1 then
+		if elapsedClock - lastSeatCheckTime >= 0.12 then
 			lastSeatCheckTime = elapsedClock
 			syncVehicleAutoState()
 		end
@@ -2289,7 +2287,12 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if isSilentActive() then
-			CachedTarget = findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck)
+			-- Khi bật dò tự động 1 -> 1000m, dò mỗi ~0.04s để vừa bám đầu chuẩn vừa giữ khung hình mượt
+			local scanInterval = isAutoRangeEnabled() and 0.04 or 0.016
+			if (elapsedClock - lastAimScanTime >= scanInterval) or not CachedTarget or not CachedTarget.Parent then
+				lastAimScanTime = elapsedClock
+				CachedTarget = findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck)
+			end
 		else
 			CachedTarget = nil
 			CachedMatchedMeter = 0
@@ -2301,7 +2304,7 @@ RunService.RenderStepped:Connect(function(dt)
 			CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
 			CachedDistance = rawDist
 
-			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
+			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.07) then
 				lastWallCheckTime = elapsedClock
 				local hum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
 				CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, hum)
