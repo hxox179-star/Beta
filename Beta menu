@@ -1,5 +1,5 @@
 -- ============================================================================
--- SILENT AIM GEMINI - SILENT AIM + ESP (SAFE UI, SAVE/LOAD, HOOK)
+-- SILENT AIM GEMINI - SILENT AIM + ESP + FIXED AUTO FIRE (SAFE UI, SAVE/LOAD)
 -- ============================================================================
 
 local Players = game:GetService("Players")
@@ -139,9 +139,6 @@ local OriginalRenderState = {
 
 local SharedWallParams = RaycastParams.new()
 SharedWallParams.FilterType = Enum.RaycastFilterType.Exclude
-
-local TriggerCrosshairParams = RaycastParams.new()
-TriggerCrosshairParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local function isFiniteNumber(n)
 	return typeof(n) == "number" and n == n and n > -math.huge and n < math.huge
@@ -1825,28 +1822,50 @@ local function isWithinMaxDistance(origin, part)
 	return dist <= Config.MaxDistance
 end
 
-local function resolveEnemyModelFromInstance(hitInst)
-	if not hitInst then return nil, nil end
-	local model = hitInst:FindFirstAncestorOfClass("Model")
-	if not model or model == LocalPlayer.Character then return nil, nil end
-	local hum = model:FindFirstChildOfClass("Humanoid")
-	if not hum or hum.Health <= 0 then return nil, nil end
-
-	local matchedPlayer = Players:GetPlayerFromCharacter(model)
-	if matchedPlayer then
-		if not shouldTargetPlayers() then return nil, nil end
-		if Config.TeamCheck and LocalPlayer.Team and matchedPlayer.Team == LocalPlayer.Team then
-			return nil, nil
-		end
-		return model, hum
+local function isGhostOrNonSolidPart(inst)
+	if not inst or not inst:IsA("BasePart") then return false end
+	local model = inst:FindFirstAncestorOfClass("Model")
+	if model and model:FindFirstChildOfClass("Humanoid") then
+		return false
 	end
-
-	if shouldTargetNpcs() then
-		return model, hum
+	if inst.Transparency >= 0.92 then
+		return true
 	end
-	return nil, nil
+	if inst.CanCollide == false and inst.CanQuery == false then
+		return true
+	end
+	return false
 end
 
+local function checkWallOcclusion(model, targetPart, aimPos, hum)
+	local bypassWall = isTargetOnVehicleOrMovingPlatform(model, targetPart, hum)
+	if bypassWall then return false, true end
+
+	local cam = Workspace.CurrentCamera
+	if not cam or not isFiniteVector3(cam.CFrame.Position) then return false, false end
+
+	local origin = cam.CFrame.Position
+	local goalPos = (aimPos and isFiniteVector3(aimPos)) and aimPos or targetPart.Position
+	local direction = goalPos - origin
+	if not isFiniteVector3(direction) or direction.Magnitude <= 0.001 then return false, false end
+
+	SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
+	local ok, result = pcall(function()
+		return Workspace:Raycast(origin, direction, SharedWallParams)
+	end)
+	if not ok or not result or not result.Instance then return false, false end
+	if isGhostOrNonSolidPart(result.Instance) then return false, false end
+	return true, false
+end
+
+local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
+	if not wallFlag then return true end
+	local isBlocked, bypassWall = checkWallOcclusion(model, targetPart, aimPos, hum)
+	if bypassWall then return true end
+	return not isBlocked
+end
+
+-- CƠ CHẾ AUTO BẮN LẤY TỪ BẢN TRƯỚC (FOV TỰ BẮN + KÍCH HOẠT TOOL/EVENT)
 local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
 	if not cam then return false end
 	local vp = cam.ViewportSize
@@ -1918,87 +1937,6 @@ local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
 	return false
 end
 
-local function checkCrosshairOnEnemy(cam, originPos)
-	if not cam or not isFiniteVector3(cam.CFrame.Position) then return false end
-	local vp = cam.ViewportSize
-	local centerX = vp.X * 0.5
-	local centerY = vp.Y * 0.5
-	local maxRayDist = (Config.MaxDistance and Config.MaxDistance > 0) and Config.MaxDistance or 2500
-	if Config.FarRender then
-		maxRayDist = math.max(maxRayDist, 25000)
-	end
-
-	local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
-	if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
-		return true
-	end
-
-	local ignoreList = { LocalPlayer.Character }
-	TriggerCrosshairParams.FilterDescendantsInstances = ignoreList
-
-	local r = trigRadius
-	local sampleOffsets = {
-		Vector2.new(0, 0),
-		Vector2.new(-r, 0),
-		Vector2.new(r, 0),
-		Vector2.new(0, -r),
-		Vector2.new(0, r)
-	}
-
-	for _, offset in ipairs(sampleOffsets) do
-		local unitRay = cam:ViewportPointToRay(centerX + offset.X, centerY + offset.Y)
-		if unitRay and isFiniteVector3(unitRay.Origin) and isFiniteVector3(unitRay.Direction) then
-			local rayOrigin = unitRay.Origin
-			local rayDirUnit = unitRay.Direction.Unit
-			local remainingDist = maxRayDist
-
-			for _ = 1, 3 do
-				TriggerCrosshairParams.FilterDescendantsInstances = ignoreList
-				local ok, result = pcall(function()
-					return Workspace:Raycast(rayOrigin, rayDirUnit * remainingDist, TriggerCrosshairParams)
-				end)
-				if not ok or not result or not result.Instance then
-					break
-				end
-
-				if isGhostOrNonSolidPart(result.Instance) then
-					table.insert(ignoreList, result.Instance)
-					local traveled = (result.Position - rayOrigin).Magnitude + 0.05
-					remainingDist = remainingDist - traveled
-					rayOrigin = result.Position + rayDirUnit * 0.05
-					if remainingDist <= 0.5 then break end
-				else
-					local model, hum = resolveEnemyModelFromInstance(result.Instance)
-					if model and hum then
-						local anchor = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head") or result.Instance
-						local allowed = true
-						if anchor and anchor:IsA("BasePart") and isFiniteVector3(anchor.Position) then
-							if not isWithinMaxDistance(originPos, anchor) then
-								allowed = false
-							end
-						end
-						if allowed and Config.TriggerBotWallCheck then
-							local bypassWall = isTargetOnVehicleOrMovingPlatform(model, result.Instance, hum)
-							if not bypassWall then
-								local lookDot = math.clamp(cam.CFrame.LookVector.Unit:Dot((result.Position - cam.CFrame.Position).Unit), -1, 1)
-								if lookDot < 0.95 then
-									allowed = false
-								end
-							end
-						end
-						if allowed then
-							return true
-						end
-					end
-					break
-				end
-			end
-		end
-	end
-
-	return false
-end
-
 local function fireToolEventsIfPresent(tool)
 	if not tool then return false end
 	local triggered = false
@@ -2023,7 +1961,7 @@ end
 
 local function pulseTriggerFire()
 	if isTriggerBurstBusy then return end
-	if elapsedClock - lastTriggerFireTime < 0.15 then return end
+	if elapsedClock - lastTriggerFireTime < 0.12 then return end
 
 	lastTriggerFireTime = elapsedClock
 	isTriggerBurstBusy = true
@@ -2196,7 +2134,8 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if Config.TriggerBot and not pausedByVehicle then
-			if checkCrosshairOnEnemy(cam, originPos) then
+			local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
+			if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
 				pulseTriggerFire()
 			end
 		end
