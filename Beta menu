@@ -904,6 +904,45 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
+local function getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
+	local charHeight = 5.4
+	local charWidth = 3.0
+	local centerPos = anchor.Position
+
+	local okBox, boxCf, boxSize = pcall(function()
+		return model:GetBoundingBox()
+	end)
+	if okBox and typeof(boxCf) == "CFrame" and typeof(boxSize) == "Vector3" and isFiniteVector3(boxSize) then
+		if boxSize.Y > 0.5 and boxSize.Y < 35 then
+			charHeight = boxSize.Y
+		end
+		local horizMax = math.max(boxSize.X, boxSize.Z)
+		if horizMax > 0.4 and horizMax < 25 then
+			charWidth = horizMax
+		end
+		if isFiniteVector3(boxCf.Position) then
+			centerPos = boxCf.Position
+		end
+	end
+
+	if hum then
+		local hip = tonumber(hum.HipHeight)
+		if hip and hip > 0.1 and hip < 12 then
+			local headH = (head and head:IsA("BasePart") and head.Size.Y) or 1.2
+			local humEstimatedH = hip + 2.0 + headH
+			if humEstimatedH > 1.2 and humEstimatedH < 25 then
+				charHeight = math.max(charHeight * 0.65, humEstimatedH)
+			end
+		end
+	end
+
+	if hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position) then
+		centerPos = Vector3.new(hrp.Position.X, centerPos.Y, hrp.Position.Z)
+	end
+
+	return centerPos, charHeight, charWidth
+end
+
 local function updateESPVisuals(cam, originPos)
 	if not ESPContainer or not cam or not isFiniteVector3(cam.CFrame.Position) then
 		hideUnusedEspEntries(1)
@@ -958,6 +997,9 @@ local function updateESPVisuals(cam, originPos)
 		end
 	end
 
+	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
+	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
+
 	local visualIndex = 0
 	for _, item in ipairs(candidates) do
 		local model = item.model
@@ -971,12 +1013,17 @@ local function updateESPVisuals(cam, originPos)
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
 			if distStuds <= maxEspDist or distMeters <= maxEspDist then
-				local anchorScreen, onAnchor = cam:WorldToViewportPoint(anchor.Position)
-				local rx, ry, rz = anchorScreen.X, anchorScreen.Y, anchorScreen.Z
+				local centerWorld, charHeight, charWidth = getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
+				local screenCenter, onScreen = cam:WorldToViewportPoint(centerWorld)
+				local rx, ry, rz = screenCenter.X, screenCenter.Y, screenCenter.Z
 
-				if onAnchor and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.25 then
-					local boxHeight = math.clamp(1050 / math.max(rz, 1.5), 10, vp.Y * 0.62)
-					local boxWidth = math.clamp(boxHeight * 0.54, 8, vp.X * 0.35)
+				if onScreen and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.25 then
+					local rawBoxH = (charHeight * projScaleY) / rz
+					local rawBoxW = (charWidth * projScaleY) / rz
+
+					local boxHeight = math.clamp(rawBoxH, 8, vp.Y * 0.85)
+					local boxWidth = math.clamp(rawBoxW, math.max(6, boxHeight * 0.36), vp.X * 0.55)
+
 					local boxLeft = math.floor(rx - boxWidth * 0.5)
 					local boxTop = math.floor(ry - boxHeight * 0.5)
 					local boxW = math.floor(boxWidth)
@@ -2146,10 +2193,6 @@ end)
 
 local function getActiveSilentAimPoint()
 	if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
-		local targetHum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
-		if not targetHum or targetHum.Health <= 0 then
-			return nil
-		end
 		if CachedAimPos and isFiniteVector3(CachedAimPos) then
 			return CachedAimPos
 		end
