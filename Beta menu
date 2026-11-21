@@ -20,7 +20,7 @@ if not LocalPlayer then
 end
 
 local AIM_TARGET_MODES = { "Player + NPC", "Player", "NPC" }
-local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Random" }
+local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Head + Body", "Random" }
 local HEADSHOT_CHANCE_PRESETS = { 25, 50, 75, 100 }
 local TABS = { "Silent Aim", "ESP", "Settings" }
 
@@ -44,7 +44,7 @@ local function getDefaultConfig()
 		ShowFOV = false,
 		TriggerFOVRadius = 6,
 		ShowTriggerFOV = true,
-		TargetPart = "Head",
+		TargetPart = "Head + Body",
 		HeadshotChance = 50,
 		MaxDistance = 0,
 		AutoSmartAim = false,
@@ -154,14 +154,14 @@ local function isFiniteVector3(v)
 end
 
 local function isCallerOwnScript()
-	if not checkcaller then return false end
+	if type(checkcaller) ~= "function" then return false end
 	local ok, res = pcall(checkcaller)
 	return ok and res == true
 end
 
 local function logDebug(msg)
 	if Config.DebugLog then
-		print("[SilentAimGemini] " .. tostring(msg))
+		pcall(print, "[SilentAimGemini] " .. tostring(msg))
 	end
 end
 
@@ -478,7 +478,16 @@ local function getAutoSeatText() return Config.AutoSeatToggle and "Tự tắt kh
 local function getAntiKickText() return Config.AntiKickClient and "Siêu Antiban/Kick: BẬT" or "Siêu Antiban/Kick: TẮT" end
 local function getSafeAngleText() return Config.SafeAngleClamp and ("Lách góc Server (" .. tostring(Config.MaxSafeAngleDeg) .. "°): BẬT") or "Lách góc Server: TẮT" end
 local function getAimModeText() return "Aim Mode: " .. tostring(Config.AimMode) end
-local function getTargetPartText() return "Mục tiêu: " .. tostring(Config.TargetPart) end
+local function getTargetPartText()
+	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
+		return "Mục tiêu: Đầu + Ngực (Random)"
+	elseif Config.TargetPart == "HumanoidRootPart" then
+		return "Mục tiêu: Ngực (Body)"
+	elseif Config.TargetPart == "Head" then
+		return "Mục tiêu: Đầu (Head)"
+	end
+	return "Mục tiêu: " .. tostring(Config.TargetPart)
+end
 local function getHeadshotChanceText() return "Tỷ lệ HS (Random): " .. tostring(Config.HeadshotChance) .. "%" end
 local function getMaxDistText()
 	if Config.MaxDistance <= 0 then return "Tầm bắn: Không giới hạn" end
@@ -665,17 +674,25 @@ end
 local function resolveHeadOrPart(model, preferredPart)
 	if not model then return preferredPart end
 	local head = model:FindFirstChild("Head")
-	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		if Config.TargetPart == "Head" then
-			return head
-		end
-		if Config.TargetPart == "Random" then
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso") or model:FindFirstChild("HumanoidRootPart")
+	local validHead = (head and head:IsA("BasePart") and isFiniteVector3(head.Position)) and head or nil
+	local validBody = (torso and torso:IsA("BasePart") and isFiniteVector3(torso.Position)) and torso or nil
+
+	if Config.TargetPart == "Head" then
+		return validHead or preferredPart
+	end
+	if Config.TargetPart == "HumanoidRootPart" then
+		return validBody or preferredPart
+	end
+	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
+		if validHead and validBody then
 			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
-			return (math.random(1, 100) <= chance) and head or preferredPart
+			return (math.random(1, 100) <= chance) and validHead or validBody
 		end
-		if preferredPart and preferredPart:IsA("BasePart") and Config.AutoSmartAim then
-			return head
-		end
+		return validHead or validBody or preferredPart
+	end
+	if preferredPart and preferredPart:IsA("BasePart") and Config.AutoSmartAim and validHead then
+		return validHead
 	end
 	return preferredPart
 end
@@ -685,27 +702,31 @@ local function pickModelTargetPart(model)
 	local head = model:FindFirstChild("Head")
 	local hrp = model:FindFirstChild("HumanoidRootPart")
 	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+	local bodyPart = (torso and torso:IsA("BasePart") and torso) or (hrp and hrp:IsA("BasePart") and hrp) or nil
 
-	if Config.TargetPart == "Random" then
+	if Config.TargetPart == "Head + Body" or Config.TargetPart == "Random" then
 		local hasHead = head and head:IsA("BasePart")
-		local fallbackBody = (hrp and hrp:IsA("BasePart") and hrp) or (torso and torso:IsA("BasePart") and torso) or nil
-		if hasHead and fallbackBody then
+		if hasHead and bodyPart then
 			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
-			return (math.random(1, 100) <= chance) and head or fallbackBody
+			return (math.random(1, 100) <= chance) and head or bodyPart
 		end
-		return (hasHead and head) or fallbackBody or nil
+		return (hasHead and head) or bodyPart or nil
+	end
+
+	if Config.TargetPart == "HumanoidRootPart" then
+		return bodyPart or (head and head:IsA("BasePart") and head) or nil
 	end
 
 	local chosen = model:FindFirstChild(Config.TargetPart)
 	if chosen and chosen:IsA("BasePart") then
-		return resolveHeadOrPart(model, chosen)
+		return chosen
 	end
-	if hrp and hrp:IsA("BasePart") then return resolveHeadOrPart(model, hrp) end
-	if torso and torso:IsA("BasePart") then return resolveHeadOrPart(model, torso) end
-	return (head and head:IsA("BasePart")) and head or nil
+	if head and head:IsA("BasePart") then return head end
+	return bodyPart
 end
 
 local function mountGui(gui)
+	if not gui then return false end
 	local mounted = false
 	if type(gethui) == "function" then
 		local ok, hui = pcall(gethui)
@@ -1257,7 +1278,7 @@ pcall(function()
 	HButton.InputBegan:Connect(beginDrag)
 
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseMovement) then
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
 			local delta = input.Position - dragStart
 			if delta.Magnitude > 5 then movedWhileDrag = true end
 			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -1630,7 +1651,7 @@ pcall(function()
 		updateFOVVisual()
 	end)
 	TargetPartBtn.MouseButton1Click:Connect(function()
-		Config.TargetPart = cyclePreset(TARGET_PART_MODES, Config.TargetPart, "Head")
+		Config.TargetPart = cyclePreset(TARGET_PART_MODES, Config.TargetPart, "Head + Body")
 		TargetPartBtn.Text = getTargetPartText()
 	end)
 	HeadshotChanceBtn.MouseButton1Click:Connect(function()
@@ -1736,52 +1757,56 @@ pcall(function()
 		updateFOVVisual()
 	end)
 
-	mountGui(ScreenGui)
-
 	local autoFlag, autoName = loadAutoLoadMeta()
 	if autoFlag then
 		Config.AutoLoadEnabled = true
 		loadConfigByName(autoName, true)
-		if SaveStatusLabel then
-			setSaveStatus("Auto Load: " .. Config.SaveName, true)
-		end
 	end
 
 	switchTab(Config.ActiveTab)
 	syncAllUiTexts()
-	applyFarRenderState(Config.FarRender)
+	if SaveStatusLabel and autoFlag then
+		setSaveStatus("Auto Load: " .. Config.SaveName, true)
+	end
+	mountGui(ScreenGui)
+	applyMenuVisibilityAndMinimize()
+	if Config.FarRender then
+		applyFarRenderState(true)
+	end
 end)
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		isFiringInputHeld = true
-	elseif input.UserInputType == Enum.UserInputType.Touch then
-		if not activeTouches[input] then
-			activeTouches[input] = true
-			activeTouchCount = activeTouchCount + 1
-		end
-		if activeTouchCount >= 7 and not sevenFingerTriggeredThisTouch then
-			sevenFingerTriggeredThisTouch = true
-			if Config.SevenFingerGesture then
-				isMenuHiddenByGesture = not isMenuHiddenByGesture
-				applyMenuVisibilityAndMinimize()
+pcall(function()
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			isFiringInputHeld = true
+		elseif input.UserInputType == Enum.UserInputType.Touch then
+			if not activeTouches[input] then
+				activeTouches[input] = true
+				activeTouchCount = activeTouchCount + 1
 			end
+			if activeTouchCount >= 7 and not sevenFingerTriggeredThisTouch then
+				sevenFingerTriggeredThisTouch = true
+				if Config.SevenFingerGesture then
+					isMenuHiddenByGesture = not isMenuHiddenByGesture
+					applyMenuVisibilityAndMinimize()
+				end
+			end
+			if not gameProcessed then isFiringInputHeld = true end
 		end
-		if not gameProcessed then isFiringInputHeld = true end
-	end
-end)
+	end)
 
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		isFiringInputHeld = false
-	elseif input.UserInputType == Enum.UserInputType.Touch then
-		if activeTouches[input] then
-			activeTouches[input] = nil
-			activeTouchCount = math.max(0, activeTouchCount - 1)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			isFiringInputHeld = false
+		elseif input.UserInputType == Enum.UserInputType.Touch then
+			if activeTouches[input] then
+				activeTouches[input] = nil
+				activeTouchCount = math.max(0, activeTouchCount - 1)
+			end
+			if activeTouchCount < 7 then sevenFingerTriggeredThisTouch = false end
+			if activeTouchCount == 0 then isFiringInputHeld = false end
 		end
-		if activeTouchCount < 7 then sevenFingerTriggeredThisTouch = false end
-		if activeTouchCount == 0 then isFiringInputHeld = false end
-	end
+	end)
 end)
 
 local function getOriginPosition(cam)
@@ -1893,10 +1918,12 @@ local function steerActiveBulletsTowardTarget(targetPos)
 	end
 end
 
-Workspace.DescendantAdded:Connect(function(desc)
-	if desc and desc:IsA("BasePart") and isSilentActive() then
-		registerTrackedBullet(desc)
-	end
+pcall(function()
+	Workspace.DescendantAdded:Connect(function(desc)
+		if desc and desc:IsA("BasePart") and isSilentActive() then
+			registerTrackedBullet(desc)
+		end
+	end)
 end)
 
 local function triggerAsyncNpcScan()
@@ -2256,86 +2283,88 @@ local function getActiveSilentAimPoint()
 	return nil
 end
 
-RunService.RenderStepped:Connect(function(dt)
-	local safeDt = isFiniteNumber(dt) and dt or 0.016
-	elapsedClock = elapsedClock + safeDt
-	updateRainbowUI()
+pcall(function()
+	RunService.RenderStepped:Connect(function(dt)
+		local safeDt = isFiniteNumber(dt) and dt or 0.016
+		elapsedClock = elapsedClock + safeDt
+		updateRainbowUI()
 
-	pcall(function()
-		if Config.FarRender and (elapsedClock - lastFarRenderSyncTime >= 1.5) then
-			lastFarRenderSyncTime = elapsedClock
-			applyFarRenderState(true)
-		end
-
-		if elapsedClock - lastSeatCheckTime >= 0.1 then
-			lastSeatCheckTime = elapsedClock
-			syncVehicleAutoState()
-		end
-
-		local cam = Workspace.CurrentCamera
-		local originPos = getOriginPosition(cam)
-
-		if elapsedClock - lastEspRenderTime >= 0.016 then
-			lastEspRenderTime = elapsedClock
-			updateESPVisuals(cam, originPos)
-		end
-
-		if isSilentActive() then
-			CachedTarget = findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck)
-		else
-			CachedTarget = nil
-		end
-
-		if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
-			local snappedPart = resolveHeadOrPart(CachedTarget.Parent, CachedTarget)
-			if snappedPart and snappedPart:IsA("BasePart") and isFiniteVector3(snappedPart.Position) then
-				CachedTarget = snappedPart
+		pcall(function()
+			if Config.FarRender and (elapsedClock - lastFarRenderSyncTime >= 1.5) then
+				lastFarRenderSyncTime = elapsedClock
+				applyFarRenderState(true)
 			end
-			local rawDist = (CachedTarget.Position - originPos).Magnitude
-			CachedTargetVelocity = estimateTargetVelocity(CachedTarget, safeDt, rawDist)
-			CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
-			CachedDistance = rawDist
 
-			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
-				lastWallCheckTime = elapsedClock
-				local hum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
-				CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, hum)
-			elseif not Config.WallCheck then
+			if elapsedClock - lastSeatCheckTime >= 0.1 then
+				lastSeatCheckTime = elapsedClock
+				syncVehicleAutoState()
+			end
+
+			local cam = Workspace.CurrentCamera
+			local originPos = getOriginPosition(cam)
+
+			if elapsedClock - lastEspRenderTime >= 0.016 then
+				lastEspRenderTime = elapsedClock
+				updateESPVisuals(cam, originPos)
+			end
+
+			if isSilentActive() then
+				CachedTarget = findBestTarget(pickModelTargetPart, Config.FOVRadius, Config.WallCheck)
+			else
+				CachedTarget = nil
+			end
+
+			if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
+				local snappedPart = resolveHeadOrPart(CachedTarget.Parent, CachedTarget)
+				if snappedPart and snappedPart:IsA("BasePart") and isFiniteVector3(snappedPart.Position) then
+					CachedTarget = snappedPart
+				end
+				local rawDist = (CachedTarget.Position - originPos).Magnitude
+				CachedTargetVelocity = estimateTargetVelocity(CachedTarget, safeDt, rawDist)
+				CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
+				CachedDistance = rawDist
+
+				if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
+					lastWallCheckTime = elapsedClock
+					local hum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
+					CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, hum)
+				elseif not Config.WallCheck then
+					CachedIsWallBlocked = false
+					CachedBypassWall = false
+				end
+			else
+				CachedTarget = nil
+				CachedAimPos = nil
+				CachedTargetVelocity = Vector3.zero
+				CachedDistance = 0
 				CachedIsWallBlocked = false
 				CachedBypassWall = false
+				prevTargetPart = nil
+				prevTargetPos = nil
+				prevTargetVel = nil
+				prevSampleTime = nil
 			end
-		else
-			CachedTarget = nil
-			CachedAimPos = nil
-			CachedTargetVelocity = Vector3.zero
-			CachedDistance = 0
-			CachedIsWallBlocked = false
-			CachedBypassWall = false
-			prevTargetPart = nil
-			prevTargetPos = nil
-			prevTargetVel = nil
-			prevSampleTime = nil
-		end
 
-		local liveAimPt = getActiveSilentAimPoint()
-		if liveAimPt then
-			steerActiveBulletsTowardTarget(liveAimPt)
-		end
-
-		if Config.TriggerBot and not pausedByVehicle then
-			local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
-			if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
-				pulseTriggerFire()
+			local liveAimPt = getActiveSilentAimPoint()
+			if liveAimPt then
+				steerActiveBulletsTowardTarget(liveAimPt)
 			end
-		end
 
-		if Config.DebugLog then
-			local currentDesc = CachedTarget and (CachedTarget.Parent.Name .. "." .. CachedTarget.Name) or "NONE"
-			if currentDesc ~= lastLoggedTargetName then
-				lastLoggedTargetName = currentDesc
-				logDebug(string.format("Target: %s | Dist: %.1f | Vel: %.1f", currentDesc, CachedDistance, CachedTargetVelocity.Magnitude))
+			if Config.TriggerBot and not pausedByVehicle then
+				local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
+				if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
+					pulseTriggerFire()
+				end
 			end
-		end
+
+			if Config.DebugLog then
+				local currentDesc = CachedTarget and (CachedTarget.Parent.Name .. "." .. CachedTarget.Name) or "NONE"
+				if currentDesc ~= lastLoggedTargetName then
+					lastLoggedTargetName = currentDesc
+					logDebug(string.format("Target: %s | Dist: %.1f | Vel: %.1f", currentDesc, CachedDistance, CachedTargetVelocity.Magnitude))
+				end
+			end
+		end)
 	end)
 end)
 
@@ -2357,18 +2386,22 @@ local function logHookHit(tag)
 end
 
 local function safeHookMetamethod(target, metamethod, handler)
-	if hookmetamethod then
+	if type(hookmetamethod) == "function" then
 		local ok, oldFn = pcall(hookmetamethod, target, metamethod, handler)
 		if ok and oldFn then return oldFn end
 	end
-	if getrawmetatable and setreadonly then
+	if type(getrawmetatable) == "function" and type(setreadonly) == "function" then
 		local ok, mt = pcall(getrawmetatable, target)
 		if ok and type(mt) == "table" and type(mt[metamethod]) == "function" then
 			local oldFn = mt[metamethod]
-			pcall(setreadonly, mt, false)
-			mt[metamethod] = function(...) return handler(...) end
-			pcall(setreadonly, mt, true)
-			return oldFn
+			local unlocked = pcall(setreadonly, mt, false)
+			if unlocked then
+				local hooked = pcall(function()
+					mt[metamethod] = function(...) return handler(...) end
+				end)
+				pcall(setreadonly, mt, true)
+				if hooked then return oldFn end
+			end
 		end
 	end
 	return nil
@@ -2393,7 +2426,7 @@ local function isSuspiciousClientRemote(inst)
 end
 
 pcall(function()
-	if hookfunction and LocalPlayer and type(LocalPlayer.Kick) == "function" then
+	if type(hookfunction) == "function" and LocalPlayer and type(LocalPlayer.Kick) == "function" then
 		local oldKick
 		oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
 			if Config.AntiKickClient and self == LocalPlayer then
@@ -2406,7 +2439,7 @@ pcall(function()
 end)
 
 pcall(function()
-	if hookfunction and TeleportService then
+	if type(hookfunction) == "function" and TeleportService then
 		if type(TeleportService.Teleport) == "function" then
 			local oldTeleport
 			oldTeleport = hookfunction(TeleportService.Teleport, function(self, ...)
@@ -2440,8 +2473,7 @@ pcall(function()
 end)
 
 pcall(function()
-	if not getnamecallmethod then
-		warn("[SilentAimGemini] Executor khong ho tro getnamecallmethod.")
+	if type(getnamecallmethod) ~= "function" then
 		return
 	end
 	local oldNamecall
@@ -2461,7 +2493,7 @@ pcall(function()
 				end
 			end
 
-			if isSilentActive() and self == Workspace and CachedTarget then
+			if isSilentActive() and self == Workspace and CachedTarget and oldNamecall then
 				local aimPoint = getActiveSilentAimPoint()
 				if aimPoint and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") then
 					if not isCallerOwnScript() then
@@ -2486,7 +2518,9 @@ pcall(function()
 				end
 			end
 		end
-		return oldNamecall(self, ...)
+		if oldNamecall then
+			return oldNamecall(self, ...)
+		end
 	end)
 end)
 
@@ -2495,9 +2529,9 @@ pcall(function()
 	if Mouse then
 		local oldIndex
 		oldIndex = safeHookMetamethod(Mouse, "__index", function(self, key)
-			if isSilentActive() and self == Mouse and CachedTarget then
+			if isSilentActive() and self == Mouse and CachedTarget and (not isCallerOwnScript()) then
 				local aimPoint = getActiveSilentAimPoint()
-				if aimPoint and (key == "Hit" or key == "Target" or key == "UnitRay") and (not isCallerOwnScript()) then
+				if aimPoint and (key == "Hit" or key == "Target" or key == "UnitRay") then
 					if key == "Hit" then
 						logHookHit("Mouse.Hit")
 						return CFrame.new(aimPoint)
@@ -2517,7 +2551,10 @@ pcall(function()
 					end
 				end
 			end
-			return oldIndex(self, key)
+			if oldIndex then
+				return oldIndex(self, key)
+			end
+			return nil
 		end)
 	end
 end)
