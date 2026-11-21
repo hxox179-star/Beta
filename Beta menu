@@ -488,8 +488,8 @@ local function getTriggerBotText() return Config.TriggerBot and "Tự bắn khi 
 local function getTriggerWallText() return Config.TriggerBotWallCheck and "WallCheck tự bắn: BẬT" or "WallCheck tự bắn: TẮT" end
 local function getESPEnabledText() return Config.ESPEnabled and "ESP Tổng: BẬT" or "ESP Tổng: TẮT" end
 local function getESPBoxText() return Config.ESPBox and "ESP Box 2D: BẬT" or "ESP Box 2D: TẮT" end
-local function getESPFixedSizeText() return Config.ESPFixedSize and "Box Cố Định (Không to nhỏ): BẬT" or "Box Co Giãn Theo Khoảng Cách: BẬT" end
-local function getESPStanceText() return Config.ESPStanceLabel and "Hiện trên box (Đứng/Ngồi/Nằm): BẬT" or "Hiện trên box (Đứng/Ngồi/Nằm): TẮT" end
+local function getESPFixedSizeText() return Config.ESPFixedSize and "Box Cố Định: BẬT" or "Box Co Giãn: BẬT" end
+local function getESPStanceText() return Config.ESPStanceLabel and "Nhãn Đứng/Ngồi/Nằm: BẬT" or "Nhãn Đứng/Ngồi/Nằm: TẮT" end
 local function getESPHealthText() return Config.ESPHealthBar and "Thanh máu dọc: BẬT" or "Thanh máu dọc: TẮT" end
 local function getESPDistText() return Config.ESPDistance and "ESP Khoảng cách: BẬT" or "ESP Khoảng cách: TẮT" end
 local function getESPWallText() return Config.ESPWallCheck and "WallCheck ESP: BẬT" or "WallCheck ESP: TẮT" end
@@ -772,6 +772,9 @@ local function applyMenuVisibilityAndMinimize()
 	end
 end
 
+-- ============================================================================
+-- ESP MODULE (ĐÃ THAY TỪ SCRIPT MỚI, GIỮ NGUYÊN NHÃN TƯ THẾ & BOX CỐ ĐỊNH)
+-- ============================================================================
 local function getOrCreateEspEntry(index)
 	if EspVisualPool[index] then
 		return EspVisualPool[index]
@@ -967,45 +970,6 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
-local function getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
-	local charHeight = 5.2
-	local charWidth = 2.8
-	local centerPos = anchor.Position
-
-	local okBox, boxCf, boxSize = pcall(function()
-		return model:GetBoundingBox()
-	end)
-	if okBox and typeof(boxCf) == "CFrame" and typeof(boxSize) == "Vector3" and isFiniteVector3(boxSize) then
-		if boxSize.Y > 0.5 and boxSize.Y < 35 then
-			charHeight = boxSize.Y
-		end
-		local horizMax = math.max(boxSize.X, boxSize.Z)
-		if horizMax > 0.4 and horizMax < 25 then
-			charWidth = horizMax
-		end
-		if isFiniteVector3(boxCf.Position) then
-			centerPos = boxCf.Position
-		end
-	end
-
-	if hum then
-		local hip = tonumber(hum.HipHeight)
-		if hip and hip > 0.1 and hip < 12 then
-			local headH = (head and head:IsA("BasePart") and head.Size.Y) or 1.2
-			local humEstimatedH = hip + 2.0 + headH
-			if humEstimatedH > 1.2 and humEstimatedH < 25 then
-				charHeight = math.max(charHeight * 0.65, humEstimatedH)
-			end
-		end
-	end
-
-	if hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position) then
-		centerPos = Vector3.new(hrp.Position.X, centerPos.Y, hrp.Position.Z)
-	end
-
-	return centerPos, charHeight, charWidth
-end
-
 local function updateESPVisuals(cam, originPos)
 	if not ESPContainer or not cam or not isFiniteVector3(cam.CFrame.Position) then
 		hideUnusedEspEntries(1)
@@ -1026,6 +990,9 @@ local function updateESPVisuals(cam, originPos)
 
 	local candidates = {}
 	local seenModels = {}
+	if shouldTargetPlayers() or shouldTargetNpcs() then
+		rebuildPlayerCharacterSet()
+	end
 
 	if shouldTargetPlayers() then
 		for _, player in ipairs(Players:GetPlayers()) do
@@ -1060,9 +1027,6 @@ local function updateESPVisuals(cam, originPos)
 		end
 	end
 
-	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
-	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
-
 	local visualIndex = 0
 	for _, item in ipairs(candidates) do
 		local model = item.model
@@ -1090,18 +1054,38 @@ local function updateESPVisuals(cam, originPos)
 						hasValidBox = true
 					end
 				else
-					local centerWorld, charHeight, charWidth = getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
-					local centerScreen, onScreen = cam:WorldToViewportPoint(centerWorld)
-					local rx, ry, rz = centerScreen.X, centerScreen.Y, centerScreen.Z
-					if onScreen and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.25 then
-						local rawBoxH = (charHeight * projScaleY) / rz
-						local rawBoxW = (charWidth * projScaleY) / rz
-						boxH = math.clamp(rawBoxH, 10, vp.Y * 0.85)
-						boxW = math.clamp(rawBoxW, math.max(7, boxH * 0.38), vp.X * 0.55)
-						boxLeft = math.floor(rx - boxW * 0.5)
-						boxTop = math.floor(ry - boxH * 0.5)
-						boxW = math.floor(boxW)
-						boxH = math.floor(boxH)
+					local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
+						and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0))
+						or (anchor.Position + Vector3.new(0, 2.8, 0))
+					local bottomWorld = anchor.Position - Vector3.new(0, 3.1, 0)
+
+					local topScreen = cam:WorldToViewportPoint(topWorld)
+					local botScreen = cam:WorldToViewportPoint(bottomWorld)
+
+					local topX, topY, topZ = topScreen.X, topScreen.Y, topScreen.Z
+					local botX, botY, botZ = botScreen.X, botScreen.Y, botScreen.Z
+
+					if isFiniteNumber(topX) and isFiniteNumber(topY) and isFiniteNumber(topZ)
+						and isFiniteNumber(botX) and isFiniteNumber(botY) and isFiniteNumber(botZ)
+						and (topZ > 0 or botZ > 0) then
+
+						if topZ < 0 then
+							topY = math.clamp(vp.Y - topY, 0, vp.Y)
+							topX = math.clamp(vp.X - topX, 0, vp.X)
+						end
+						if botZ < 0 then
+							botY = math.clamp(vp.Y - botY, 0, vp.Y)
+							botX = math.clamp(vp.X - botX, 0, vp.X)
+						end
+
+						local boxHeight = math.clamp(math.abs(botY - topY), 16, vp.Y * 0.9)
+						local boxWidth = math.clamp(boxHeight * 0.56, 12, vp.X * 0.6)
+						local centerX = (topX + botX) * 0.5
+						local minY = math.min(topY, botY)
+						boxLeft = math.floor(centerX - boxWidth * 0.5)
+						boxTop = math.floor(minY)
+						boxW = math.floor(boxWidth)
+						boxH = math.floor(boxHeight)
 						hasValidBox = true
 					end
 				end
@@ -1146,9 +1130,8 @@ local function updateESPVisuals(cam, originPos)
 							if Config.ESPHealthBar then
 								local maxHp = math.max(1, tonumber(hum.MaxHealth) or 100)
 								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
-								local barW = (boxH < 24) and 2 or (boxH < 45 and 3 or 4)
-								local barGap = (boxH < 24) and 2 or 3
-								local barLeft = boxLeft - barW - barGap
+								local barW = 4
+								local barLeft = boxLeft - barW - 3
 								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
 								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
 								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
@@ -1163,8 +1146,8 @@ local function updateESPVisuals(cam, originPos)
 						if entry.dist then
 							if Config.ESPDistance then
 								entry.dist.Text = tostring(distMeters) .. "m"
-								entry.dist.Position = UDim2.new(0, boxLeft - 10, 0, boxTop + boxH + 2)
-								entry.dist.Size = UDim2.new(0, boxW + 20, 0, 14)
+								entry.dist.Position = UDim2.new(0, boxLeft, 0, boxTop + boxH + 2)
+								entry.dist.Size = UDim2.new(0, boxW, 0, 14)
 								entry.dist.Visible = true
 							else
 								entry.dist.Visible = false
