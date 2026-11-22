@@ -32,6 +32,7 @@ local MemoryAutoLoadName = nil
 local function getDefaultConfig()
 	return {
 		Enabled = false,
+		FakeLag = false,
 		ActiveTab = "Silent Aim",
 		AutoSeatToggle = true,
 		AntiKickClient = true,
@@ -69,7 +70,7 @@ local Config = getDefaultConfig()
 local ScreenGui, FOVFrame, TriggerFOVFrame, ESPContainer, FOVLabel, TriggerFOVLabel, ESPDistLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
 local PageFrames = {}
 local TabButtons = {}
-local ToggleSilentBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
+local ToggleSilentBtn, FakeLagBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
 local mainStroke
 local EspVisualPool = {}
 
@@ -111,12 +112,15 @@ local lastTriggerFireTime = 0
 local lastEspRenderTime = 0
 local lastPlayerSetRebuildTime = 0
 local lastWeaponRangeSyncTime = 0
+local lastFakeLagSyncTime = 0
 local isTriggerBurstBusy = false
 local elapsedClock = 0
 local isScanningNpc = false
 
 local CachedNpcEntries = {}
 local PlayerCharacterSet = {}
+local FakeLagFrozenParts = {}
+local FakeLagWasActive = false
 
 local OriginalRenderState = {
 	Captured = false,
@@ -158,6 +162,101 @@ end
 
 local function isCurrentlyFiring()
 	return isFiringInputHeld == true
+end
+
+local function isModelOwnedByLocalPlayer(model)
+	if not model or not LocalPlayer then return false end
+	if model == LocalPlayer.Character then return true end
+	if PlayerCharacterSet[model] then return false end
+	return false
+end
+
+local function releaseFakeLagState()
+	FakeLagWasActive = false
+	for part, state in pairs(FakeLagFrozenParts) do
+		if part and part.Parent and part:IsA("BasePart") then
+			pcall(function()
+				part.Anchored = state.Anchored == true
+				if state.CFrame and isFiniteVector3(state.CFrame.Position) then
+					part.CFrame = state.CFrame
+				end
+				if state.Velocity and isFiniteVector3(state.Velocity) then
+					part.AssemblyLinearVelocity = state.Velocity
+				end
+			end)
+		end
+		FakeLagFrozenParts[part] = nil
+	end
+end
+
+local function syncFakeLagEnemies(enabled)
+	if not enabled then
+		if FakeLagWasActive or next(FakeLagFrozenParts) ~= nil then
+			releaseFakeLagState()
+		end
+		return
+	end
+
+	FakeLagWasActive = true
+	local myChar = LocalPlayer and LocalPlayer.Character
+	local activePartSet = {}
+
+	local function freezeModelParts(model)
+		if not model or not model.Parent or model == myChar or PlayerCharacterSet[model] then return end
+		local hum = model:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then return end
+
+		for _, desc in ipairs(model:GetDescendants()) do
+			if desc:IsA("BasePart") and isFiniteVector3(desc.Position) then
+				activePartSet[desc] = true
+				if not FakeLagFrozenParts[desc] then
+					FakeLagFrozenParts[desc] = {
+						Anchored = desc.Anchored,
+						CFrame = desc.CFrame,
+						Velocity = desc.AssemblyLinearVelocity
+					}
+					pcall(function()
+						desc.AssemblyLinearVelocity = Vector3.zero
+						desc.AssemblyAngularVelocity = Vector3.zero
+						desc.Anchored = true
+					end)
+				else
+					local saved = FakeLagFrozenParts[desc]
+					if saved and saved.CFrame and isFiniteVector3(saved.CFrame.Position) then
+						pcall(function()
+							desc.AssemblyLinearVelocity = Vector3.zero
+							desc.AssemblyAngularVelocity = Vector3.zero
+							desc.Anchored = true
+							desc.CFrame = saved.CFrame
+						end)
+					end
+				end
+			end
+		end
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			freezeModelParts(player.Character)
+		end
+	end
+
+	for _, entry in ipairs(CachedNpcEntries) do
+		if entry and entry.model then
+			freezeModelParts(entry.model)
+		end
+	end
+
+	for part, state in pairs(FakeLagFrozenParts) do
+		if not activePartSet[part] then
+			if part and part.Parent and part:IsA("BasePart") then
+				pcall(function()
+					part.Anchored = state.Anchored == true
+				end)
+			end
+			FakeLagFrozenParts[part] = nil
+		end
+	end
 end
 
 local function detectServerWeaponRange()
@@ -405,6 +504,9 @@ local function applyConfigTable(tbl)
 	end
 	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
 	userDesiredEnabled = Config.Enabled
+	if not Config.FakeLag then
+		releaseFakeLagState()
+	end
 end
 
 local function saveConfigByName(rawName)
@@ -522,6 +624,7 @@ local function deleteConfigByName(rawName)
 	end
 end
 
+local function getFakeLagText() return Config.FakeLag and "Fake Lag: BẬT" or "Fake Lag: TẮT" end
 local function getToggleTriggerFOVText() return Config.ShowTriggerFOV and "FOV Tự bắn: HIỆN" or "FOV Tự bắn: ẨN" end
 local function getAutoSeatText() return Config.AutoSeatToggle and "Tự tắt khi lên xe: BẬT" or "Tự tắt khi lên xe: TẮT" end
 local function getAntiKickText() return Config.AntiKickClient and "Siêu Antiban/Kick: BẬT" or "Siêu Antiban/Kick: TẮT" end
@@ -605,6 +708,10 @@ end
 
 local function syncAllUiTexts()
 	refreshSilentToggleButton()
+	if FakeLagBtn then
+		FakeLagBtn.Text = getFakeLagText()
+		FakeLagBtn.BackgroundColor3 = Config.FakeLag and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
 	if ToggleTriggerFOVBtn then ToggleTriggerFOVBtn.Text = getToggleTriggerFOVText() end
 	if AutoSeatBtn then
 		AutoSeatBtn.Text = getAutoSeatText()
@@ -1642,20 +1749,21 @@ pcall(function()
 	-- TAB 1: SILENT AIM
 	local silentPage = PageFrames["Silent Aim"]
 	ToggleSilentBtn = createButton(silentPage, "Silent Aim: TẮT", 1)
-	AimModeBtn = createButton(silentPage, getAimModeText(), 2)
-	TargetPartBtn = createButton(silentPage, getTargetPartText(), 3)
-	HeadshotChanceBtn = createButton(silentPage, getHeadshotChanceText(), 4)
-	AutoRangeBtn = createButton(silentPage, getAutoRangeText(), 5)
-	WallCheckBtn = createButton(silentPage, "WallCheck Silent: TẮT", 6)
-	TeamCheckBtn = createButton(silentPage, "Kiểm tra đồng đội: TẮT", 7)
-	ToggleFOVBtn = createButton(silentPage, "FOV Silent: ẨN", 8)
+	FakeLagBtn = createButton(silentPage, getFakeLagText(), 2)
+	AimModeBtn = createButton(silentPage, getAimModeText(), 3)
+	TargetPartBtn = createButton(silentPage, getTargetPartText(), 4)
+	HeadshotChanceBtn = createButton(silentPage, getHeadshotChanceText(), 5)
+	AutoRangeBtn = createButton(silentPage, getAutoRangeText(), 6)
+	WallCheckBtn = createButton(silentPage, "WallCheck Silent: TẮT", 7)
+	TeamCheckBtn = createButton(silentPage, "Kiểm tra đồng đội: TẮT", 8)
+	ToggleFOVBtn = createButton(silentPage, "FOV Silent: ẨN", 9)
 	local FOVMinus, FOVPlus
-	FOVLabel, FOVMinus, FOVPlus = createStepper(silentPage, "FOV Silent: " .. tostring(Config.FOVRadius), "-15", "+15", Color3.fromRGB(160, 240, 220), 9)
-	TriggerBotBtn = createButton(silentPage, getTriggerBotText(), 10)
-	TriggerWallBtn = createButton(silentPage, getTriggerWallText(), 11)
-	ToggleTriggerFOVBtn = createButton(silentPage, getToggleTriggerFOVText(), 12)
+	FOVLabel, FOVMinus, FOVPlus = createStepper(silentPage, "FOV Silent: " .. tostring(Config.FOVRadius), "-15", "+15", Color3.fromRGB(160, 240, 220), 10)
+	TriggerBotBtn = createButton(silentPage, getTriggerBotText(), 11)
+	TriggerWallBtn = createButton(silentPage, getTriggerWallText(), 12)
+	ToggleTriggerFOVBtn = createButton(silentPage, getToggleTriggerFOVText(), 13)
 	local TrigFOVMinus, TrigFOVPlus
-	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 13)
+	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 14)
 
 	-- TAB 2: ESP
 	local espPage = PageFrames["ESP"]
@@ -1755,6 +1863,12 @@ pcall(function()
 		Config.Enabled = userDesiredEnabled and not pausedByVehicle
 		refreshSilentToggleButton()
 		updateFOVVisual()
+	end)
+	FakeLagBtn.MouseButton1Click:Connect(function()
+		Config.FakeLag = not Config.FakeLag
+		FakeLagBtn.Text = getFakeLagText()
+		FakeLagBtn.BackgroundColor3 = Config.FakeLag and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+		syncFakeLagEnemies(Config.FakeLag)
 	end)
 	ToggleTriggerFOVBtn.MouseButton1Click:Connect(function()
 		Config.ShowTriggerFOV = not Config.ShowTriggerFOV
@@ -1889,6 +2003,7 @@ pcall(function()
 		Config.AutoLoadEnabled = keepAutoLoad
 		userDesiredEnabled = Config.Enabled
 		pausedByVehicle = false
+		releaseFakeLagState()
 		syncAllUiTexts()
 		applyFarRenderState(false)
 		setSaveStatus("Đã reset về mặc định", true)
@@ -1929,6 +2044,7 @@ pcall(function()
 	syncWeaponRangeAuto()
 	syncAllUiTexts()
 	applyFarRenderState(Config.FarRender)
+	syncFakeLagEnemies(Config.FakeLag)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -2291,6 +2407,15 @@ RunService.RenderStepped:Connect(function(dt)
 		if Config.FarRender and (elapsedClock - lastFarRenderSyncTime >= 1.5) then
 			lastFarRenderSyncTime = elapsedClock
 			applyFarRenderState(true)
+		end
+
+		if Config.FakeLag then
+			if elapsedClock - lastFakeLagSyncTime >= 0.03 then
+				lastFakeLagSyncTime = elapsedClock
+				syncFakeLagEnemies(true)
+			end
+		elseif FakeLagWasActive or next(FakeLagFrozenParts) ~= nil then
+			syncFakeLagEnemies(false)
 		end
 
 		if elapsedClock - lastSeatCheckTime >= 0.1 then
