@@ -1033,7 +1033,7 @@ end
 
 local function isEnemyPlayer(player)
 	if player == LocalPlayer then return false end
-	if Config.TeamCheck and LocalPlayer.Team and player.Team == LocalPlayer.Team then return false end
+	if Config.TeamCheck and LocalPlayer.Team and player.Team and player.Team == LocalPlayer.Team then return false end
 	local char = player.Character
 	if not char or not char.Parent or char == LocalPlayer.Character then return false end
 	local hum = char:FindFirstChildOfClass("Humanoid")
@@ -1041,50 +1041,111 @@ local function isEnemyPlayer(player)
 end
 
 local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
-	local basePos = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
-	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
-	local legDrop = math.clamp(hipHeight + 0.65, 1.35, 3.4)
-	local headTopOffset = 0.65
-	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		headTopOffset = math.clamp(head.Size.Y * 0.62, 0.45, 1.1)
-	end
-
-	local topWorld = Vector3.new(basePos.X, basePos.Y + 2.35, basePos.Z)
-	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		topWorld = Vector3.new(basePos.X, math.max(basePos.Y + 1.35, head.Position.Y + headTopOffset), basePos.Z)
-	end
-	local bottomWorld = Vector3.new(basePos.X, basePos.Y - legDrop, basePos.Z)
-
-	local midScreen, midOk = cam:WorldToViewportPoint(basePos)
-	if not (midOk and isFiniteNumber(midScreen.Z) and midScreen.Z > 0.25 and isFiniteNumber(midScreen.X) and isFiniteNumber(midScreen.Y)) then
+	if not model or not cam or not anchor or not isFiniteVector3(anchor.Position) then
 		return nil
 	end
 
-	local topScreen, topOk = cam:WorldToViewportPoint(topWorld)
-	local botScreen, botOk = cam:WorldToViewportPoint(bottomWorld)
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("Torso")
+	local legNames = {
+		"LeftFoot", "RightFoot",
+		"LeftLowerLeg", "RightLowerLeg",
+		"LeftUpperLeg", "RightUpperLeg",
+		"Left Leg", "Right Leg"
+	}
 
-	local boxHeight
-	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) and botScreen.Y > topScreen.Y then
-		boxHeight = botScreen.Y - topScreen.Y
+	local minX, maxX = math.huge, -math.huge
+	local minY, maxY = math.huge, -math.huge
+	local minZ, maxZ = math.huge, -math.huge
+	local hasBodyBounds = false
+
+	local function includePartBounds(p, expandYTop, expandYBot, expandSide)
+		if not p or not p:IsA("BasePart") or not isFiniteVector3(p.Position) then return end
+		local sx = p.Size.X * 0.5 * (expandSide or 1.0)
+		local syTop = p.Size.Y * 0.5 * (expandYTop or 1.0)
+		local syBot = p.Size.Y * 0.5 * (expandYBot or 1.0)
+		local sz = p.Size.Z * 0.5 * (expandSide or 1.0)
+		local pos = p.Position
+
+		minX = math.min(minX, pos.X - sx)
+		maxX = math.max(maxX, pos.X + sx)
+		minY = math.min(minY, pos.Y - syBot)
+		maxY = math.max(maxY, pos.Y + syTop)
+		minZ = math.min(minZ, pos.Z - sz)
+		maxZ = math.max(maxZ, pos.Z + sz)
+		hasBodyBounds = true
+	end
+
+	if head and head:IsA("BasePart") then
+		includePartBounds(head, 1.12, 1.0, 1.18)
+	end
+	if torso and torso:IsA("BasePart") then
+		includePartBounds(torso, 1.0, 1.0, 1.25)
+	end
+	for _, n in ipairs(legNames) do
+		local lp = model:FindFirstChild(n)
+		if lp and lp:IsA("BasePart") then
+			includePartBounds(lp, 1.0, 1.06, 1.15)
+		end
+	end
+
+	local basePos = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
+	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
+
+	if not hasBodyBounds then
+		local topEst = (head and head:IsA("BasePart") and isFiniteVector3(head.Position)) and (head.Position.Y + head.Size.Y * 0.6) or (basePos.Y + 2.2)
+		local botEst = basePos.Y - math.clamp(hipHeight + 0.65, 1.4, 3.5)
+		minX, maxX = basePos.X - 1.1, basePos.X + 1.1
+		minY, maxY = math.min(botEst, topEst - 1.2), math.max(topEst, botEst + 1.2)
+		minZ, maxZ = basePos.Z - 1.0, basePos.Z + 1.0
 	else
-		boxHeight = (5.2 * projScaleY) / midScreen.Z
+		-- Đảm bảo đỉnh đầu không bị cắt thấp hơn Head và đáy chân chạm tới chân thật
+		if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+			maxY = math.max(maxY, head.Position.Y + head.Size.Y * 0.56)
+		end
+		local expectedFootY = basePos.Y - math.clamp(hipHeight + 0.55, 1.2, 3.4)
+		if minY > expectedFootY and #legNames == 0 then
+			minY = expectedFootY
+		end
 	end
 
-	boxHeight = math.clamp(boxHeight, 10, vp.Y * 0.85)
-	local boxWidth = math.clamp(boxHeight * 0.50, 6, boxHeight * 0.56)
+	local corners = {
+		Vector3.new(minX, minY, minZ), Vector3.new(minX, minY, maxZ),
+		Vector3.new(minX, maxY, minZ), Vector3.new(minX, maxY, maxZ),
+		Vector3.new(maxX, minY, minZ), Vector3.new(maxX, minY, maxZ),
+		Vector3.new(maxX, maxY, minZ), Vector3.new(maxX, maxY, maxZ),
+	}
 
-	local centerX = midScreen.X
-	if topOk and botOk and isFiniteNumber(topScreen.X) and isFiniteNumber(botScreen.X) then
-		centerX = (topScreen.X + botScreen.X + midScreen.X) / 3
+	local sMinX, sMaxX = math.huge, -math.huge
+	local sMinY, sMaxY = math.huge, -math.huge
+	local anyInFront = false
+
+	for _, c in ipairs(corners) do
+		local sp, ok = cam:WorldToViewportPoint(c)
+		if isFiniteNumber(sp.Z) and sp.Z > 0.1 and isFiniteNumber(sp.X) and isFiniteNumber(sp.Y) then
+			anyInFront = true
+			if ok or (sp.X >= -vp.X * 0.5 and sp.X <= vp.X * 1.5 and sp.Y >= -vp.Y * 0.5 and sp.Y <= vp.Y * 1.5) then
+				sMinX = math.min(sMinX, sp.X)
+				sMaxX = math.max(sMaxX, sp.X)
+				sMinY = math.min(sMinY, sp.Y)
+				sMaxY = math.max(sMaxY, sp.Y)
+			end
+		end
 	end
 
-	local centerY = midScreen.Y
-	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) then
-		centerY = (topScreen.Y + botScreen.Y) * 0.5
+	if not anyInFront or sMinX == math.huge or sMinY == math.huge then
+		return nil
 	end
 
-	local boxW = math.max(4, math.floor(boxWidth + 0.5))
-	local boxH = math.max(6, math.floor(boxHeight + 0.5))
+	local rawW = math.max(4, sMaxX - sMinX)
+	local rawH = math.max(6, sMaxY - sMinY)
+
+	-- Nới rộng 2 bên trái phải thêm một chút để ôm thoải mái và cân đối
+	local boxW = math.floor(math.clamp(rawW * 1.18, 6, vp.X * 0.75) + 0.5)
+	local boxH = math.floor(math.clamp(rawH * 1.04, 8, vp.Y * 0.90) + 0.5)
+
+	local centerX = (sMinX + sMaxX) * 0.5
+	local centerY = (sMinY + sMaxY) * 0.5
+
 	local boxLeft = math.floor(centerX - boxW * 0.5 + 0.5)
 	local boxTop = math.floor(centerY - boxH * 0.5 + 0.5)
 
@@ -1101,6 +1162,9 @@ local function updateESPVisuals(cam, originPos)
 		return
 	end
 
+	if ESPContainer.Parent ~= ScreenGui and ScreenGui then
+		ESPContainer.Parent = ScreenGui
+	end
 	ESPContainer.Visible = true
 	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
 	local vp = cam.ViewportSize
@@ -1134,7 +1198,7 @@ local function updateESPVisuals(cam, originPos)
 				table.insert(candidates, { model = npcModel, hum = hum })
 			end
 		end
-		for _, obj in ipairs(Workspace:GetChildren()) do
+		for _, obj in ipairs(Workspace:GetDescendants()) do
 			if obj:IsA("Model") and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character and not seenModels[obj] then
 				local hum = obj:FindFirstChildOfClass("Humanoid")
 				if hum and hum.Health > 0 then
@@ -1154,13 +1218,15 @@ local function updateESPVisuals(cam, originPos)
 		local hum = item.hum
 		local hrp = model:FindFirstChild("HumanoidRootPart")
 		local head = model:FindFirstChild("Head")
-		local anchor = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
+		local anchor = (hrp and hrp:IsA("BasePart") and hrp)
+			or (head and head:IsA("BasePart") and head)
+			or model:FindFirstChildWhichIsA("BasePart")
 
 		if anchor and isFiniteVector3(anchor.Position) then
 			local distStuds = (anchor.Position - originPos).Magnitude
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
-			if distStuds <= maxEspDist or distMeters <= maxEspDist then
+			if distStuds <= math.max(maxEspDist, maxEspDist / 0.28) or distMeters <= maxEspDist then
 				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
 				if boxLeft then
 					visualIndex = visualIndex + 1
@@ -1918,23 +1984,24 @@ local function triggerAsyncNpcScan()
 	isScanningNpc = true
 	task.spawn(function()
 		local newEntries = {}
+		local seen = {}
 		local myChar = LocalPlayer.Character
 		pcall(function()
 			for _, obj in ipairs(Workspace:GetChildren()) do
-				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
+				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] and not seen[obj] then
 					local hum = obj:FindFirstChildOfClass("Humanoid")
 					if hum and hum.Health > 0 then
+						seen[obj] = true
 						table.insert(newEntries, { model = obj, hum = hum })
 					end
 				end
 			end
-			if #newEntries == 0 or Config.FarRender then
-				for _, obj in ipairs(Workspace:GetDescendants()) do
-					if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] then
-						local hum = obj:FindFirstChildOfClass("Humanoid")
-						if hum and hum.Health > 0 then
-							table.insert(newEntries, { model = obj, hum = hum })
-						end
+			for _, obj in ipairs(Workspace:GetDescendants()) do
+				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] and not seen[obj] then
+					local hum = obj:FindFirstChildOfClass("Humanoid")
+					if hum and hum.Health > 0 then
+						seen[obj] = true
+						table.insert(newEntries, { model = obj, hum = hum })
 					end
 				end
 			end
@@ -2211,6 +2278,11 @@ RunService.RenderStepped:Connect(function(dt)
 		if elapsedClock - lastPlayerSetRebuildTime >= 0.25 then
 			lastPlayerSetRebuildTime = elapsedClock
 			rebuildPlayerCharacterSet()
+		end
+
+		if shouldTargetNpcs() and (#CachedNpcEntries == 0 or elapsedClock - lastNpcScanTime >= 1.2) then
+			lastNpcScanTime = elapsedClock
+			triggerAsyncNpcScan()
 		end
 
 		if elapsedClock - lastWeaponRangeSyncTime >= 0.4 then
