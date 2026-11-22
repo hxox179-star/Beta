@@ -154,8 +154,7 @@ local function safeFloor(n, fallback)
 	if not isFiniteNumber(n) then
 		return fallback or 0
 	end
-	local clamped = math.clamp(n, -1e7, 1e7)
-	return math.floor(clamped)
+	return math.floor(math.clamp(n, -1e7, 1e7))
 end
 
 local function isFiniteVector3(v)
@@ -1697,11 +1696,11 @@ pcall(function()
 		ESPWallBtn.BackgroundColor3 = Config.ESPWallCheck and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end)
 	ESPDistMinus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.max(150, (safeNum(Config.ESPMaxDistance, 350)) - 150)
+		Config.ESPMaxDistance = math.max(150, safeNum(Config.ESPMaxDistance, 350) - 150)
 		updateFOVVisual()
 	end)
 	ESPDistPlus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.min(1500, (safeNum(Config.ESPMaxDistance, 350)) + 150)
+		Config.ESPMaxDistance = math.min(1500, safeNum(Config.ESPMaxDistance, 350) + 150)
 		updateFOVVisual()
 	end)
 	AntiKickBtn.MouseButton1Click:Connect(function()
