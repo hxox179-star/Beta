@@ -224,11 +224,20 @@ local function syncFakeLagEnemies(enabled)
 						CFrame = desc.CFrame,
 						Velocity = desc.AssemblyLinearVelocity
 					}
+					pcall(function()
+						desc.AssemblyLinearVelocity = Vector3.zero
+						desc.AssemblyAngularVelocity = Vector3.zero
+						desc.Anchored = true
+					end)
+				else
+					pcall(function()
+						desc.AssemblyLinearVelocity = Vector3.zero
+						desc.AssemblyAngularVelocity = Vector3.zero
+						if desc.Anchored ~= true then
+							desc.Anchored = true
+						end
+					end)
 				end
-				pcall(function()
-					desc.AssemblyLinearVelocity = Vector3.zero
-					desc.AssemblyAngularVelocity = Vector3.zero
-				end)
 			end
 		end
 	end
@@ -1150,17 +1159,53 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 		return nil
 	end
 
-	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
-	local centerWorld = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("Torso")
+	local limbNames = {
+		"LeftFoot", "RightFoot",
+		"LeftLowerLeg", "RightLowerLeg",
+		"LeftUpperLeg", "RightUpperLeg",
+		"Left Leg", "Right Leg"
+	}
 
-	local topWorld
-	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		topWorld = Vector3.new(head.Position.X, head.Position.Y + head.Size.Y * 0.55 + 0.15, head.Position.Z)
-	else
-		topWorld = centerWorld + Vector3.new(0, math.max(1.8, hipHeight + 1.1), 0)
+	local highestY = -math.huge
+	local lowestY = math.huge
+	local foundPart = false
+
+	local function scanPartVertical(p, topPad, botPad)
+		if not p or not p:IsA("BasePart") or not isFiniteVector3(p.Position) then return end
+		local halfY = p.Size.Y * 0.5
+		highestY = math.max(highestY, p.Position.Y + halfY + (topPad or 0))
+		lowestY = math.min(lowestY, p.Position.Y - halfY - (botPad or 0))
+		foundPart = true
 	end
 
-	local botWorld = Vector3.new(centerWorld.X, centerWorld.Y - math.max(1.6, hipHeight + 0.85), centerWorld.Z)
+	if head and head:IsA("BasePart") then
+		scanPartVertical(head, 0.12, 0.0)
+	end
+	if torso and torso:IsA("BasePart") then
+		scanPartVertical(torso, 0.0, 0.0)
+	end
+	for _, n in ipairs(limbNames) do
+		local lp = model:FindFirstChild(n)
+		if lp and lp:IsA("BasePart") then
+			scanPartVertical(lp, 0.0, 0.08)
+		end
+	end
+
+	local centerWorld = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
+	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
+
+	if not foundPart then
+		highestY = centerWorld.Y + math.max(1.8, hipHeight + 1.1)
+		lowestY = centerWorld.Y - math.max(1.8, hipHeight + 0.9)
+	else
+		if hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position) then
+			lowestY = math.min(lowestY, hrp.Position.Y - math.max(1.6, hipHeight + 0.65))
+		end
+	end
+
+	local topWorld = Vector3.new(centerWorld.X, highestY, centerWorld.Z)
+	local botWorld = Vector3.new(centerWorld.X, lowestY, centerWorld.Z)
 
 	local topScreen, topVis = cam:WorldToViewportPoint(topWorld)
 	local botScreen, botVis = cam:WorldToViewportPoint(botWorld)
@@ -1173,11 +1218,12 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 		return nil
 	end
 
-	local boxH = math.floor(math.clamp(math.abs(botScreen.Y - topScreen.Y), 8, vp.Y * 0.9) + 0.5)
-	local boxW = math.floor(math.clamp(boxH * 0.55, 6, vp.X * 0.7) + 0.5)
+	local rawH = math.abs(botScreen.Y - topScreen.Y)
+	local boxH = math.floor(math.clamp(rawH, 8, vp.Y * 0.92) + 0.5)
+	local boxW = math.floor(math.clamp(boxH * 0.56, 6, vp.X * 0.72) + 0.5)
 
 	local boxLeft = math.floor(centerScreen.X - boxW * 0.5 + 0.5)
-	local boxTop = math.floor(topScreen.Y + 0.5)
+	local boxTop = math.floor(math.min(topScreen.Y, botScreen.Y) + 0.5)
 
 	return boxLeft, boxTop, boxW, boxH
 end
