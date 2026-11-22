@@ -120,6 +120,7 @@ local isScanningNpc = false
 local CachedNpcEntries = {}
 local PlayerCharacterSet = {}
 local FakeLagFrozenParts = {}
+local FakeLagPendingShots = {}
 local FakeLagWasActive = false
 
 local OriginalRenderState = {
@@ -164,11 +165,21 @@ local function isCurrentlyFiring()
 	return isFiringInputHeld == true
 end
 
-local function isModelOwnedByLocalPlayer(model)
-	if not model or not LocalPlayer then return false end
-	if model == LocalPlayer.Character then return true end
-	if PlayerCharacterSet[model] then return false end
-	return false
+local function flushFakeLagPendingShots()
+	if #FakeLagPendingShots == 0 then return end
+	local queued = FakeLagPendingShots
+	FakeLagPendingShots = {}
+	for _, shot in ipairs(queued) do
+		if shot and shot.remote and shot.remote.Parent then
+			pcall(function()
+				if shot.remote:IsA("RemoteEvent") then
+					shot.remote:FireServer(table.unpack(shot.args or {}))
+				elseif shot.remote:IsA("RemoteFunction") then
+					shot.remote:InvokeServer(table.unpack(shot.args or {}))
+				end
+			end)
+		end
+	end
 end
 
 local function releaseFakeLagState()
@@ -187,11 +198,12 @@ local function releaseFakeLagState()
 		end
 		FakeLagFrozenParts[part] = nil
 	end
+	flushFakeLagPendingShots()
 end
 
 local function syncFakeLagEnemies(enabled)
 	if not enabled then
-		if FakeLagWasActive or next(FakeLagFrozenParts) ~= nil then
+		if FakeLagWasActive or next(FakeLagFrozenParts) ~= nil or #FakeLagPendingShots > 0 then
 			releaseFakeLagState()
 		end
 		return
@@ -1183,15 +1195,15 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 	end
 
 	if head and head:IsA("BasePart") then
-		includePartBounds(head, 1.12, 1.0, 1.18)
+		includePartBounds(head, 1.15, 1.0, 1.15)
 	end
 	if torso and torso:IsA("BasePart") then
-		includePartBounds(torso, 1.0, 1.0, 1.25)
+		includePartBounds(torso, 1.0, 1.0, 1.15)
 	end
 	for _, n in ipairs(legNames) do
 		local lp = model:FindFirstChild(n)
 		if lp and lp:IsA("BasePart") then
-			includePartBounds(lp, 1.0, 1.06, 1.15)
+			includePartBounds(lp, 1.0, 1.05, 1.1)
 		end
 	end
 
@@ -1206,11 +1218,7 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 		minZ, maxZ = basePos.Z - 1.0, basePos.Z + 1.0
 	else
 		if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-			maxY = math.max(maxY, head.Position.Y + head.Size.Y * 0.56)
-		end
-		local expectedFootY = basePos.Y - math.clamp(hipHeight + 0.55, 1.2, 3.4)
-		if minY > expectedFootY and #legNames == 0 then
-			minY = expectedFootY
+			maxY = math.max(maxY, head.Position.Y + head.Size.Y * 0.55)
 		end
 	end
 
@@ -1242,12 +1250,8 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 		return nil
 	end
 
-	local rawW = math.max(4, sMaxX - sMinX)
-	local rawH = math.max(6, sMaxY - sMinY)
-
-	local boxW = math.floor(math.clamp(rawW * 1.18, 6, vp.X * 0.75) + 0.5)
-	local boxH = math.floor(math.clamp(rawH * 1.04, 8, vp.Y * 0.90) + 0.5)
-
+	local boxW = math.floor(math.clamp(sMaxX - sMinX, 6, vp.X * 0.7) + 0.5)
+	local boxH = math.floor(math.clamp(sMaxY - sMinY, 8, vp.Y * 0.9) + 0.5)
 	local centerX = (sMinX + sMaxX) * 0.5
 	local centerY = (sMinY + sMaxY) * 0.5
 
@@ -2414,7 +2418,7 @@ RunService.RenderStepped:Connect(function(dt)
 				lastFakeLagSyncTime = elapsedClock
 				syncFakeLagEnemies(true)
 			end
-		elseif FakeLagWasActive or next(FakeLagFrozenParts) ~= nil then
+		elseif FakeLagWasActive or next(FakeLagFrozenParts) ~= nil or #FakeLagPendingShots > 0 then
 			syncFakeLagEnemies(false)
 		end
 
@@ -2538,6 +2542,20 @@ local function isSuspiciousClientRemote(inst)
 	return false
 end
 
+local function isWeaponDamageOrHitRemote(inst)
+	if not inst or not (inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction")) then
+		return false
+	end
+	local lowerName = string.lower(inst.Name or "")
+	local keys = { "hit", "damage", "dmg", "shoot", "fire", "bullet", "hurt", "attack", "gun" }
+	for _, k in ipairs(keys) do
+		if string.find(lowerName, k, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 pcall(function()
 	if hookfunction and LocalPlayer and type(LocalPlayer.Kick) == "function" then
 		local oldKick
@@ -2604,6 +2622,18 @@ pcall(function()
 						logHookHit("Blocked suspicious remote: " .. tostring(self.Name))
 						return nil
 					end
+				end
+			end
+
+			if Config.FakeLag and (method == "FireServer" or method == "InvokeServer") and isWeaponDamageOrHitRemote(self) and not isCallerOwnScript() then
+				if #FakeLagPendingShots < 180 then
+					table.insert(FakeLagPendingShots, {
+						remote = self,
+						method = method,
+						args = { ... }
+					})
+					logHookHit("Queued FakeLag shot: " .. tostring(self.Name))
+					return nil
 				end
 			end
 
