@@ -57,7 +57,6 @@ local function getDefaultConfig()
 		ESPBox = true,
 		ESPHealthBar = true,
 		ESPDistance = true,
-		ESPStance = true,
 		ESPWallCheck = true,
 		ESPMaxDistance = 350,
 		AutoLoadEnabled = false,
@@ -71,7 +70,7 @@ local Config = getDefaultConfig()
 local ScreenGui, FOVFrame, TriggerFOVFrame, ESPContainer, FOVLabel, TriggerFOVLabel, ESPDistLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
 local PageFrames = {}
 local TabButtons = {}
-local ToggleSilentBtn, FakeLagBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPStanceBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
+local ToggleSilentBtn, FakeLagBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
 local mainStroke
 local EspVisualPool = {}
 
@@ -657,7 +656,6 @@ local function getESPEnabledText() return Config.ESPEnabled and "ESP Tổng: B�
 local function getESPBoxText() return Config.ESPBox and "ESP Box 2D: BẬT" or "ESP Box 2D: TẮT" end
 local function getESPHealthText() return Config.ESPHealthBar and "Thanh máu dọc: BẬT" or "Thanh máu dọc: TẮT" end
 local function getESPDistText() return Config.ESPDistance and "ESP Khoảng cách: BẬT" or "ESP Khoảng cách: TẮT" end
-local function getESPStanceText() return Config.ESPStance and "Đứng / Ngồi / Nằm: BẬT" or "Đứng / Ngồi / Nằm: TẮT" end
 local function getESPWallText() return Config.ESPWallCheck and "WallCheck ESP: BẬT" or "WallCheck ESP: TẮT" end
 local function getESPDistRangeText() return "Khoảng cách ESP: " .. tostring(Config.ESPMaxDistance) .. "m" end
 local function getAutoLoadText() return Config.AutoLoadEnabled and "Auto Load Save: BẬT" or "Auto Load Save: TẮT" end
@@ -775,10 +773,6 @@ local function syncAllUiTexts()
 	if ESPDistBtn then
 		ESPDistBtn.Text = getESPDistText()
 		ESPDistBtn.BackgroundColor3 = Config.ESPDistance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
-	end
-	if ESPStanceBtn then
-		ESPStanceBtn.Text = getESPStanceText()
-		ESPStanceBtn.BackgroundColor3 = Config.ESPStance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end
 	if ESPWallBtn then
 		ESPWallBtn.Text = getESPWallText()
@@ -1005,47 +999,19 @@ local function getOrCreateEspEntry(index)
 	distLabel.ZIndex = 5
 	distLabel.Parent = ESPContainer
 
-	local standLabel = Instance.new("TextLabel")
-	standLabel.Name = "EspStand_" .. tostring(index)
-	standLabel.BackgroundTransparency = 1
-	standLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
-	standLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
-	standLabel.TextStrokeTransparency = 0.15
-	standLabel.Font = Enum.Font.GothamBold
-	standLabel.TextSize = 10
-	standLabel.Text = "ĐỨNG"
-	standLabel.Visible = false
-	standLabel.Active = false
-	standLabel.ZIndex = 6
-	standLabel.Parent = ESPContainer
-
-	local sitLabel = Instance.new("TextLabel")
-	sitLabel.Name = "EspSit_" .. tostring(index)
-	sitLabel.BackgroundTransparency = 1
-	sitLabel.TextColor3 = Color3.fromRGB(255, 215, 70)
-	sitLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
-	sitLabel.TextStrokeTransparency = 0.15
-	sitLabel.Font = Enum.Font.GothamBold
-	sitLabel.TextSize = 10
-	sitLabel.Text = "NGỒI"
-	sitLabel.Visible = false
-	sitLabel.Active = false
-	sitLabel.ZIndex = 6
-	sitLabel.Parent = ESPContainer
-
-	local proneLabel = Instance.new("TextLabel")
-	proneLabel.Name = "EspProne_" .. tostring(index)
-	proneLabel.BackgroundTransparency = 1
-	proneLabel.TextColor3 = Color3.fromRGB(255, 110, 110)
-	proneLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
-	proneLabel.TextStrokeTransparency = 0.15
-	proneLabel.Font = Enum.Font.GothamBold
-	proneLabel.TextSize = 10
-	proneLabel.Text = "NẰM"
-	proneLabel.Visible = false
-	proneLabel.Active = false
-	proneLabel.ZIndex = 6
-	proneLabel.Parent = ESPContainer
+	local poseLabel = Instance.new("TextLabel")
+	poseLabel.Name = "EspPose_" .. tostring(index)
+	poseLabel.BackgroundTransparency = 1
+	poseLabel.TextColor3 = Color3.fromRGB(255, 245, 140)
+	poseLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
+	poseLabel.TextStrokeTransparency = 0.15
+	poseLabel.Font = Enum.Font.GothamBold
+	poseLabel.TextSize = 11
+	poseLabel.Text = ""
+	poseLabel.Visible = false
+	poseLabel.Active = false
+	poseLabel.ZIndex = 5
+	poseLabel.Parent = ESPContainer
 
 	local entry = {
 		box = boxFrame,
@@ -1053,9 +1019,7 @@ local function getOrCreateEspEntry(index)
 		hpBg = hpBg,
 		hpFill = hpFill,
 		dist = distLabel,
-		standPose = standLabel,
-		sitPose = sitLabel,
-		pronePose = proneLabel
+		pose = poseLabel
 	}
 	EspVisualPool[index] = entry
 	return entry
@@ -1068,16 +1032,14 @@ local function hideUnusedEspEntries(startIndex)
 			if entry.box then entry.box.Visible = false end
 			if entry.hpBg then entry.hpBg.Visible = false end
 			if entry.dist then entry.dist.Visible = false end
-			if entry.standPose then entry.standPose.Visible = false end
-			if entry.sitPose then entry.sitPose.Visible = false end
-			if entry.pronePose then entry.pronePose.Visible = false end
+			if entry.pose then entry.pose.Visible = false end
 		end
 	end
 end
 
-local function getEnemyStanceState(model, hum, hrp, head)
+local function getEnemyStanceLabel(model, hum, hrp, head)
 	if not model or not hum then
-		return "STAND"
+		return "ĐỨNG", Color3.fromRGB(245, 248, 255)
 	end
 
 	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
@@ -1100,7 +1062,7 @@ local function getEnemyStanceState(model, hum, hrp, head)
 	end
 
 	if isProne then
-		return "PRONE"
+		return "NẰM", Color3.fromRGB(255, 110, 110)
 	end
 
 	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
@@ -1115,10 +1077,10 @@ local function getEnemyStanceState(model, hum, hrp, head)
 	end
 
 	if hasSeatPart or hum.Sit or isCrouchedByHeight then
-		return "SIT"
+		return "NGỒI", Color3.fromRGB(255, 215, 70)
 	end
 
-	return "STAND"
+	return "ĐỨNG", Color3.fromRGB(245, 248, 255)
 end
 
 local function getHealthColor(ratio)
@@ -1271,7 +1233,7 @@ local function updateESPVisuals(cam, originPos)
 		hideUnusedEspEntries(1)
 		return
 	end
-	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance and not Config.ESPStance) then
+	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance) then
 		hideUnusedEspEntries(1)
 		return
 	end
@@ -1395,30 +1357,19 @@ local function updateESPVisuals(cam, originPos)
 							end
 						end
 
-						-- Tách riêng từng nhãn ĐỨNG / NGỒI / NẰM và cho phép bật/tắt bằng ESPStance
-						if entry.standPose and entry.sitPose and entry.pronePose then
-							if Config.ESPStance then
-								local stanceState = getEnemyStanceState(model, hum, hrp, head)
-								local tagW = 46
-								local tagH = 12
-								local tagLeft = math.floor(boxLeft + boxW * 0.5 - tagW * 0.5)
-								local tagTop = boxTop - tagH - 2
-
-								entry.standPose.Position = UDim2.new(0, tagLeft, 0, tagTop)
-								entry.standPose.Size = UDim2.new(0, tagW, 0, tagH)
-								entry.standPose.Visible = (stanceState == "STAND")
-
-								entry.sitPose.Position = UDim2.new(0, tagLeft, 0, tagTop)
-								entry.sitPose.Size = UDim2.new(0, tagW, 0, tagH)
-								entry.sitPose.Visible = (stanceState == "SIT")
-
-								entry.pronePose.Position = UDim2.new(0, tagLeft, 0, tagTop)
-								entry.pronePose.Size = UDim2.new(0, tagW, 0, tagH)
-								entry.pronePose.Visible = (stanceState == "PRONE")
+						if entry.pose then
+							if Config.ESPBox or Config.ESPDistance or Config.ESPHealthBar then
+								local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head)
+								local labelW = math.max(boxW, 56)
+								local labelLeft = math.floor(boxLeft + boxW * 0.5 - labelW * 0.5)
+								local labelTop = boxTop - 16
+								entry.pose.Text = stanceText
+								entry.pose.TextColor3 = stanceColor
+								entry.pose.Position = UDim2.new(0, labelLeft, 0, labelTop)
+								entry.pose.Size = UDim2.new(0, labelW, 0, 14)
+								entry.pose.Visible = true
 							else
-								entry.standPose.Visible = false
-								entry.sitPose.Visible = false
-								entry.pronePose.Visible = false
+								entry.pose.Visible = false
 							end
 						end
 					end
@@ -1788,13 +1739,12 @@ pcall(function()
 	-- TAB 2: ESP
 	local espPage = PageFrames["ESP"]
 	ESPEnabledBtn = createButton(espPage, getESPEnabledText(), 1)
-	ESPStanceBtn = createButton(espPage, getESPStanceText(), 2)
-	ESPBoxBtn = createButton(espPage, getESPBoxText(), 3)
-	ESPHealthBtn = createButton(espPage, getESPHealthText(), 4)
-	ESPDistBtn = createButton(espPage, getESPDistText(), 5)
-	ESPWallBtn = createButton(espPage, getESPWallText(), 6)
+	ESPBoxBtn = createButton(espPage, getESPBoxText(), 2)
+	ESPHealthBtn = createButton(espPage, getESPHealthText(), 3)
+	ESPDistBtn = createButton(espPage, getESPDistText(), 4)
+	ESPWallBtn = createButton(espPage, getESPWallText(), 5)
 	local ESPDistMinus, ESPDistPlus
-	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-150", "+150", Color3.fromRGB(140, 245, 175), 7)
+	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-150", "+150", Color3.fromRGB(140, 245, 175), 6)
 
 	-- TAB 3: SETTINGS
 	local settingsPage = PageFrames["Settings"]
@@ -1901,20 +1851,6 @@ pcall(function()
 		ESPEnabledBtn.Text = getESPEnabledText()
 		ESPEnabledBtn.BackgroundColor3 = Config.ESPEnabled and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 		if not Config.ESPEnabled then hideUnusedEspEntries(1) end
-	end)
-	ESPStanceBtn.MouseButton1Click:Connect(function()
-		Config.ESPStance = not Config.ESPStance
-		ESPStanceBtn.Text = getESPStanceText()
-		ESPStanceBtn.BackgroundColor3 = Config.ESPStance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
-		if not Config.ESPStance then
-			for _, entry in ipairs(EspVisualPool) do
-				if entry then
-					if entry.standPose then entry.standPose.Visible = false end
-					if entry.sitPose then entry.sitPose.Visible = false end
-					if entry.pronePose then entry.pronePose.Visible = false end
-				end
-			end
-		end
 	end)
 	ESPBoxBtn.MouseButton1Click:Connect(function()
 		Config.ESPBox = not Config.ESPBox
