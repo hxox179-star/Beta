@@ -928,45 +928,42 @@ local function getEnemyStanceLabel(model, hum, hrp, head)
 		return "ĐỨNG", Color3.fromRGB(245, 248, 255)
 	end
 
-	local okState, state = pcall(function()
-		return hum:GetState()
-	end)
-
-	local isActivelyMoving = false
-	if hum.MoveDirection and hum.MoveDirection.Magnitude > 0.12 then
-		isActivelyMoving = true
-	elseif hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.AssemblyLinearVelocity) then
-		local horizSpeed = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z).Magnitude
-		if horizSpeed > 3.0 then
-			isActivelyMoving = true
-		end
-	end
-
-	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
-	if hasSeatPart or (not isActivelyMoving and (hum.Sit or (okState and state == Enum.HumanoidStateType.Seated))) then
-		return "NGỒI", Color3.fromRGB(255, 215, 70)
-	end
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp)
+		or (torso and torso:IsA("BasePart") and torso)
+		or (head and head:IsA("BasePart") and head)
+		or nil
 
 	local isProne = false
-	if not isActivelyMoving and okState and (state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.FallingDown) then
-		isProne = true
-	end
-
-	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
-	if not isActivelyMoving and anchorPart and isFiniteVector3(anchorPart.Position) then
+	if anchorPart and isFiniteVector3(anchorPart.Position) then
 		local upVec = anchorPart.CFrame.UpVector
-		local flatBody = isFiniteVector3(upVec) and (math.abs(upVec.Y) < 0.25)
-		local headOffsetSmall = false
-		if head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
-			headOffsetSmall = (head.Position.Y - hrp.Position.Y) < 0.55
+		if isFiniteVector3(upVec) and math.abs(upVec.Y) < 0.22 then
+			isProne = true
 		end
-		if flatBody and headOffsetSmall then
+	end
+	if not isProne and head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
+		if (head.Position.Y - hrp.Position.Y) < 0.65 then
 			isProne = true
 		end
 	end
 
 	if isProne then
 		return "NẰM", Color3.fromRGB(255, 110, 110)
+	end
+
+	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
+	local hipHeight = tonumber(hum.HipHeight) or 2
+	local isCrouchedByHeight = false
+	if head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
+		local verticalHeadDelta = head.Position.Y - hrp.Position.Y
+		local expectedStandingDelta = math.max(1.25, hipHeight * 0.72 + head.Size.Y * 0.5)
+		if verticalHeadDelta < expectedStandingDelta * 0.68 then
+			isCrouchedByHeight = true
+		end
+	end
+
+	if hasSeatPart or hum.Sit or isCrouchedByHeight then
+		return "NGỒI", Color3.fromRGB(255, 215, 70)
 	end
 
 	return "ĐỨNG", Color3.fromRGB(245, 248, 255)
@@ -1043,60 +1040,55 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
-local function getCharacterScreenBounds(model, hrp, head, anchor, cam, vp)
-	local boxCf, boxSize = CFrame.new(anchor.Position), Vector3.new(2.4, 5.2, 1.4)
-	local okBox, cfRes, szRes = pcall(function()
-		return model:GetBoundingBox()
-	end)
-	if okBox and typeof(cfRes) == "CFrame" and typeof(szRes) == "Vector3" and isFiniteVector3(szRes) and isFiniteVector3(cfRes.Position) then
-		boxCf = cfRes
-		boxSize = Vector3.new(
-			math.clamp(szRes.X, 0.8, 8),
-			math.clamp(szRes.Y, 1.2, 10),
-			math.clamp(szRes.Z, 0.8, 8)
-		)
+local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
+	local basePos = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
+	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
+	local legDrop = math.clamp(hipHeight + 0.65, 1.35, 3.4)
+	local headTopOffset = 0.65
+	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+		headTopOffset = math.clamp(head.Size.Y * 0.62, 0.45, 1.1)
 	end
 
-	local hx = boxSize.X * 0.5
-	local hy = boxSize.Y * 0.5
-	local hz = boxSize.Z * 0.5
-
-	local minX, minY = math.huge, math.huge
-	local maxX, maxY = -math.huge, -math.huge
-	local anyValid = false
-
-	for sx = -1, 1, 2 do
-		for sy = -1, 1, 2 do
-			for sz = -1, 1, 2 do
-				local cornerWorld = boxCf:PointToWorldSpace(Vector3.new(sx * hx, sy * hy, sz * hz))
-				local sp, onScreen = cam:WorldToViewportPoint(cornerWorld)
-				if onScreen and isFiniteNumber(sp.X) and isFiniteNumber(sp.Y) and isFiniteNumber(sp.Z) and sp.Z > 0.05 then
-					anyValid = true
-					if sp.X < minX then minX = sp.X end
-					if sp.X > maxX then maxX = sp.X end
-					if sp.Y < minY then minY = sp.Y end
-					if sp.Y > maxY then maxY = sp.Y end
-				end
-			end
-		end
+	local topWorld = Vector3.new(basePos.X, basePos.Y + 2.35, basePos.Z)
+	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+		topWorld = Vector3.new(basePos.X, math.max(basePos.Y + 1.35, head.Position.Y + headTopOffset), basePos.Z)
 	end
+	local bottomWorld = Vector3.new(basePos.X, basePos.Y - legDrop, basePos.Z)
 
-	if not anyValid or maxX <= minX or maxY <= minY then
+	local midScreen, midOk = cam:WorldToViewportPoint(basePos)
+	if not (midOk and isFiniteNumber(midScreen.Z) and midScreen.Z > 0.25 and isFiniteNumber(midScreen.X) and isFiniteNumber(midScreen.Y)) then
 		return nil
 	end
 
-	minX = math.clamp(minX, 0, vp.X)
-	maxX = math.clamp(maxX, 0, vp.X)
-	minY = math.clamp(minY, 0, vp.Y)
-	maxY = math.clamp(maxY, 0, vp.Y)
+	local topScreen, topOk = cam:WorldToViewportPoint(topWorld)
+	local botScreen, botOk = cam:WorldToViewportPoint(bottomWorld)
 
-	local w = maxX - minX
-	local h = maxY - minY
-	if w < 4 or h < 6 then
-		return nil
+	local boxHeight
+	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) and botScreen.Y > topScreen.Y then
+		boxHeight = botScreen.Y - topScreen.Y
+	else
+		boxHeight = (5.2 * projScaleY) / midScreen.Z
 	end
 
-	return math.floor(minX), math.floor(minY), math.floor(w), math.floor(h)
+	boxHeight = math.clamp(boxHeight, 10, vp.Y * 0.85)
+	local boxWidth = math.clamp(boxHeight * 0.50, 6, boxHeight * 0.56)
+
+	local centerX = midScreen.X
+	if topOk and botOk and isFiniteNumber(topScreen.X) and isFiniteNumber(botScreen.X) then
+		centerX = (topScreen.X + botScreen.X + midScreen.X) / 3
+	end
+
+	local centerY = midScreen.Y
+	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) then
+		centerY = (topScreen.Y + botScreen.Y) * 0.5
+	end
+
+	local boxW = math.max(4, math.floor(boxWidth + 0.5))
+	local boxH = math.max(6, math.floor(boxHeight + 0.5))
+	local boxLeft = math.floor(centerX - boxW * 0.5 + 0.5)
+	local boxTop = math.floor(centerY - boxH * 0.5 + 0.5)
+
+	return boxLeft, boxTop, boxW, boxH
 end
 
 local function updateESPVisuals(cam, originPos)
@@ -1153,6 +1145,9 @@ local function updateESPVisuals(cam, originPos)
 		end
 	end
 
+	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
+	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
+
 	local visualIndex = 0
 	for _, item in ipairs(candidates) do
 		local model = item.model
@@ -1166,7 +1161,7 @@ local function updateESPVisuals(cam, originPos)
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
 			if distStuds <= maxEspDist or distMeters <= maxEspDist then
-				local boxLeft, boxTop, boxW, boxH = getCharacterScreenBounds(model, hrp, head, anchor, cam, vp)
+				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
 				if boxLeft then
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
@@ -1184,7 +1179,7 @@ local function updateESPVisuals(cam, originPos)
 								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
 								if entry.stroke then
 									entry.stroke.Color = boxColor
-									entry.stroke.Thickness = 1.6
+									entry.stroke.Thickness = 1.4
 								end
 								entry.box.Visible = true
 							else
@@ -1196,8 +1191,8 @@ local function updateESPVisuals(cam, originPos)
 							if Config.ESPHealthBar then
 								local maxHp = math.max(1, tonumber(hum.MaxHealth) or 100)
 								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
-								local barW = 4
-								local barLeft = boxLeft - barW - 3
+								local barW = 3
+								local barLeft = boxLeft - barW - 2
 								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
 								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
 								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
