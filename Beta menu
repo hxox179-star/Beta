@@ -853,8 +853,8 @@ local function getOrCreateEspEntry(index)
 
 	local hpBg = Instance.new("Frame")
 	hpBg.Name = "EspHpBg_" .. tostring(index)
-	hpBg.BackgroundColor3 = Color3.fromRGB(15, 16, 20)
-	hpBg.BackgroundTransparency = 0.25
+	hpBg.BackgroundColor3 = Color3.fromRGB(12, 13, 16)
+	hpBg.BackgroundTransparency = 0.12
 	hpBg.BorderSizePixel = 0
 	hpBg.Visible = false
 	hpBg.Active = false
@@ -1098,7 +1098,6 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 		minY, maxY = math.min(botEst, topEst - 1.2), math.max(topEst, botEst + 1.2)
 		minZ, maxZ = basePos.Z - 1.0, basePos.Z + 1.0
 	else
-		-- Đảm bảo đỉnh đầu không bị cắt thấp hơn Head và đáy chân chạm tới chân thật
 		if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
 			maxY = math.max(maxY, head.Position.Y + head.Size.Y * 0.56)
 		end
@@ -1139,7 +1138,6 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 	local rawW = math.max(4, sMaxX - sMinX)
 	local rawH = math.max(6, sMaxY - sMinY)
 
-	-- Nới rộng 2 bên trái phải thêm một chút để ôm thoải mái và cân đối
 	local boxW = math.floor(math.clamp(rawW * 1.18, 6, vp.X * 0.75) + 0.5)
 	local boxH = math.floor(math.clamp(rawH * 1.04, 8, vp.Y * 0.90) + 0.5)
 
@@ -1257,8 +1255,8 @@ local function updateESPVisuals(cam, originPos)
 							if Config.ESPHealthBar then
 								local maxHp = math.max(1, tonumber(hum.MaxHealth) or 100)
 								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
-								local barW = 3
-								local barLeft = boxLeft - barW - 2
+								local barW = 5
+								local barLeft = boxLeft - barW - 3
 								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
 								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
 								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
@@ -1309,8 +1307,8 @@ pcall(function()
 	ScreenGui = Instance.new("ScreenGui")
 	ScreenGui.Name = "SilentAimGeminiGUI"
 	ScreenGui.ResetOnSpawn = false
-	ScreenGui.IgnoreGuiInset = true
-	ScreenGui.DisplayOrder = 999999
+	ScreenGui.IgnoreGuiInset = false
+	ScreenGui.DisplayOrder = 20
 	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 	ESPContainer = Instance.new("Frame")
