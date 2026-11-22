@@ -928,26 +928,42 @@ local function getEnemyStanceLabel(model, hum, hrp, head)
 		return "ĐỨNG", Color3.fromRGB(245, 248, 255)
 	end
 
-	local okState, state = pcall(function()
-		return hum:GetState()
-	end)
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp)
+		or (torso and torso:IsA("BasePart") and torso)
+		or (head and head:IsA("BasePart") and head)
+		or nil
 
-	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
-	if hasSeatPart or hum.Sit or (okState and state == Enum.HumanoidStateType.Seated) then
-		return "NGỒI", Color3.fromRGB(255, 215, 70)
-	end
-
-	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
+	local isProne = false
 	if anchorPart and isFiniteVector3(anchorPart.Position) then
 		local upVec = anchorPart.CFrame.UpVector
-		local isLyingFlat = isFiniteVector3(upVec) and (math.abs(upVec.Y) < 0.15)
-		local headIsLow = false
-		if head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
-			headIsLow = (head.Position.Y - hrp.Position.Y) < 0.35
+		if isFiniteVector3(upVec) and math.abs(upVec.Y) < 0.22 then
+			isProne = true
 		end
-		if isLyingFlat and headIsLow then
-			return "NẰM", Color3.fromRGB(255, 110, 110)
+	end
+	if not isProne and head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
+		if (head.Position.Y - hrp.Position.Y) < 0.65 then
+			isProne = true
 		end
+	end
+
+	if isProne then
+		return "NẰM", Color3.fromRGB(255, 110, 110)
+	end
+
+	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
+	local hipHeight = tonumber(hum.HipHeight) or 2
+	local isCrouchedByHeight = false
+	if head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
+		local verticalHeadDelta = head.Position.Y - hrp.Position.Y
+		local expectedStandingDelta = math.max(1.25, hipHeight * 0.72 + head.Size.Y * 0.5)
+		if verticalHeadDelta < expectedStandingDelta * 0.68 then
+			isCrouchedByHeight = true
+		end
+	end
+
+	if hasSeatPart or hum.Sit or isCrouchedByHeight then
+		return "NGỒI", Color3.fromRGB(255, 215, 70)
 	end
 
 	return "ĐỨNG", Color3.fromRGB(245, 248, 255)
@@ -1026,43 +1042,51 @@ end
 
 local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
 	local basePos = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
-	local topWorld = basePos + Vector3.new(0, 2.55, 0)
-	local bottomWorld = basePos - Vector3.new(0, 2.75, 0)
-
+	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
+	local legDrop = math.clamp(hipHeight + 0.65, 1.35, 3.4)
+	local headTopOffset = 0.65
 	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		topWorld = Vector3.new(basePos.X, math.max(topWorld.Y, head.Position.Y + head.Size.Y * 0.65), basePos.Z)
+		headTopOffset = math.clamp(head.Size.Y * 0.62, 0.45, 1.1)
+	end
+
+	local topWorld = Vector3.new(basePos.X, basePos.Y + 2.35, basePos.Z)
+	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+		topWorld = Vector3.new(basePos.X, math.max(basePos.Y + 1.35, head.Position.Y + headTopOffset), basePos.Z)
+	end
+	local bottomWorld = Vector3.new(basePos.X, basePos.Y - legDrop, basePos.Z)
+
+	local midScreen, midOk = cam:WorldToViewportPoint(basePos)
+	if not (midOk and isFiniteNumber(midScreen.Z) and midScreen.Z > 0.25 and isFiniteNumber(midScreen.X) and isFiniteNumber(midScreen.Y)) then
+		return nil
 	end
 
 	local topScreen, topOk = cam:WorldToViewportPoint(topWorld)
 	local botScreen, botOk = cam:WorldToViewportPoint(bottomWorld)
-	local centerScreen, midOk = cam:WorldToViewportPoint(basePos)
 
-	if not (midOk and isFiniteNumber(centerScreen.Z) and centerScreen.Z > 0.25 and isFiniteNumber(centerScreen.X) and isFiniteNumber(centerScreen.Y)) then
-		return nil
-	end
-
-	local depth = centerScreen.Z
 	local boxHeight
 	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) and botScreen.Y > topScreen.Y then
 		boxHeight = botScreen.Y - topScreen.Y
 	else
-		boxHeight = (5.3 * projScaleY) / depth
+		boxHeight = (5.2 * projScaleY) / midScreen.Z
 	end
 
 	boxHeight = math.clamp(boxHeight, 10, vp.Y * 0.85)
-	local boxWidth = math.clamp(boxHeight * 0.48, 6, boxHeight * 0.56)
+	local boxWidth = math.clamp(boxHeight * 0.50, 6, boxHeight * 0.56)
 
-	local centerX = (topOk and botOk and isFiniteNumber(topScreen.X) and isFiniteNumber(botScreen.X))
-		and ((topScreen.X + botScreen.X) * 0.5)
-		or centerScreen.X
-	local centerY = (topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y))
-		and ((topScreen.Y + botScreen.Y) * 0.5)
-		or centerScreen.Y
+	local centerX = midScreen.X
+	if topOk and botOk and isFiniteNumber(topScreen.X) and isFiniteNumber(botScreen.X) then
+		centerX = (topScreen.X + botScreen.X + midScreen.X) / 3
+	end
 
-	local boxLeft = math.floor(centerX - boxWidth * 0.5)
-	local boxTop = math.floor(centerY - boxHeight * 0.5)
-	local boxW = math.max(4, math.floor(boxWidth))
-	local boxH = math.max(6, math.floor(boxHeight))
+	local centerY = midScreen.Y
+	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) then
+		centerY = (topScreen.Y + botScreen.Y) * 0.5
+	end
+
+	local boxW = math.max(4, math.floor(boxWidth + 0.5))
+	local boxH = math.max(6, math.floor(boxHeight + 0.5))
+	local boxLeft = math.floor(centerX - boxW * 0.5 + 0.5)
+	local boxTop = math.floor(centerY - boxH * 0.5 + 0.5)
 
 	return boxLeft, boxTop, boxW, boxH
 end
