@@ -923,26 +923,61 @@ local function hideUnusedEspEntries(startIndex)
 	end
 end
 
+local function getRigPartsForModel(model, hrp, head)
+	local upperTorso = model:FindFirstChild("UpperTorso")
+	local lowerTorso = model:FindFirstChild("LowerTorso")
+	local torso = upperTorso or lowerTorso or model:FindFirstChild("Torso")
+
+	local legNames = {
+		"LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+		"RightUpperLeg", "RightLowerLeg", "RightFoot",
+		"Left Leg", "Right Leg"
+	}
+	local legParts = {}
+	for _, name in ipairs(legNames) do
+		local p = model:FindFirstChild(name)
+		if p and p:IsA("BasePart") and isFiniteVector3(p.Position) then
+			table.insert(legParts, p)
+		end
+	end
+
+	return torso, upperTorso, lowerTorso, legParts
+end
+
 local function getEnemyStanceLabel(model, hum, hrp, head)
 	if not model or not hum then
 		return "ĐỨNG", Color3.fromRGB(245, 248, 255)
 	end
 
-	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
-	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp)
-		or (torso and torso:IsA("BasePart") and torso)
+	local torso, upperTorso, lowerTorso, legParts = getRigPartsForModel(model, hrp, head)
+	local bodyPart = torso
+		or (hrp and hrp:IsA("BasePart") and hrp)
 		or (head and head:IsA("BasePart") and head)
 		or nil
 
-	local isProne = false
-	if anchorPart and isFiniteVector3(anchorPart.Position) then
-		local upVec = anchorPart.CFrame.UpVector
-		if isFiniteVector3(upVec) and math.abs(upVec.Y) < 0.22 then
-			isProne = true
+	local headPos = (head and head:IsA("BasePart") and isFiniteVector3(head.Position)) and head.Position or nil
+	local hrpPos = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or nil
+	local torsoPos = (bodyPart and bodyPart:IsA("BasePart") and isFiniteVector3(bodyPart.Position)) and bodyPart.Position or nil
+
+	local minFootY = nil
+	for _, lp in ipairs(legParts) do
+		local footY = lp.Position.Y - lp.Size.Y * 0.5
+		if not minFootY or footY < minFootY then
+			minFootY = footY
 		end
 	end
-	if not isProne and head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
-		if (head.Position.Y - hrp.Position.Y) < 0.65 then
+
+	local upDot = 1
+	if bodyPart and isFiniteVector3(bodyPart.CFrame.UpVector) then
+		upDot = math.abs(bodyPart.CFrame.UpVector.Y)
+	end
+
+	local isProne = false
+	if upDot < 0.28 then
+		isProne = true
+	elseif headPos and (torsoPos or hrpPos) then
+		local refY = torsoPos and torsoPos.Y or hrpPos.Y
+		if (headPos.Y - refY) < 0.45 then
 			isProne = true
 		end
 	end
@@ -952,17 +987,25 @@ local function getEnemyStanceLabel(model, hum, hrp, head)
 	end
 
 	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
-	local hipHeight = tonumber(hum.HipHeight) or 2
-	local isCrouchedByHeight = false
-	if head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
-		local verticalHeadDelta = head.Position.Y - hrp.Position.Y
-		local expectedStandingDelta = math.max(1.25, hipHeight * 0.72 + head.Size.Y * 0.5)
-		if verticalHeadDelta < expectedStandingDelta * 0.68 then
-			isCrouchedByHeight = true
+	local isCrouched = false
+
+	if headPos and minFootY then
+		local totalSpanY = headPos.Y - minFootY
+		local hipHeight = tonumber(hum.HipHeight) or 2
+		local expectedStandingSpan = math.max(3.6, hipHeight + 2.2)
+		if totalSpanY < expectedStandingSpan * 0.74 then
+			isCrouched = true
+		end
+	elseif headPos and hrpPos then
+		local hipHeight = tonumber(hum.HipHeight) or 2
+		local headToHrp = headPos.Y - hrpPos.Y
+		local expectedDelta = math.max(1.35, hipHeight * 0.72 + 0.55)
+		if headToHrp < expectedDelta * 0.68 then
+			isCrouched = true
 		end
 	end
 
-	if hasSeatPart or hum.Sit or isCrouchedByHeight then
+	if hasSeatPart or hum.Sit or isCrouched then
 		return "NGỒI", Color3.fromRGB(255, 215, 70)
 	end
 
@@ -1041,44 +1084,79 @@ local function isEnemyPlayer(player)
 end
 
 local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
-	local basePos = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
-	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
-	local legDrop = math.clamp(hipHeight + 0.65, 1.35, 3.4)
-	local headTopOffset = 0.65
-	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		headTopOffset = math.clamp(head.Size.Y * 0.62, 0.45, 1.1)
-	end
+	local torso, upperTorso, lowerTorso, legParts = getRigPartsForModel(model, hrp, head)
+	local centerRef = torso
+		or (hrp and hrp:IsA("BasePart") and hrp)
+		or (head and head:IsA("BasePart") and head)
+		or anchor
 
-	local topWorld = Vector3.new(basePos.X, basePos.Y + 2.35, basePos.Z)
-	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		topWorld = Vector3.new(basePos.X, math.max(basePos.Y + 1.35, head.Position.Y + headTopOffset), basePos.Z)
-	end
-	local bottomWorld = Vector3.new(basePos.X, basePos.Y - legDrop, basePos.Z)
-
-	local midScreen, midOk = cam:WorldToViewportPoint(basePos)
-	if not (midOk and isFiniteNumber(midScreen.Z) and midScreen.Z > 0.25 and isFiniteNumber(midScreen.X) and isFiniteNumber(midScreen.Y)) then
+	if not centerRef or not isFiniteVector3(centerRef.Position) then
 		return nil
 	end
 
+	local centerScreen, midOk = cam:WorldToViewportPoint(centerRef.Position)
+	if not (midOk and isFiniteNumber(centerScreen.Z) and centerScreen.Z > 0.25 and isFiniteNumber(centerScreen.X) and isFiniteNumber(centerScreen.Y)) then
+		return nil
+	end
+
+	local topYWorld = centerRef.Position.Y + 2.15
+	local bottomYWorld = centerRef.Position.Y - 2.35
+	local halfWidthWorld = 1.05
+
+	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+		topYWorld = math.max(topYWorld, head.Position.Y + head.Size.Y * 0.58)
+	end
+
+	if #legParts > 0 then
+		local lowestFoot = nil
+		for _, lp in ipairs(legParts) do
+			local footEdge = lp.Position.Y - lp.Size.Y * 0.5
+			if not lowestFoot or footEdge < lowestFoot then
+				lowestFoot = footEdge
+			end
+		end
+		if lowestFoot then
+			bottomYWorld = lowestFoot - 0.05
+		end
+	else
+		local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
+		local baseY = (hrp and hrp:IsA("BasePart") and hrp.Position.Y) or centerRef.Position.Y
+		bottomYWorld = baseY - math.clamp(hipHeight + 0.55, 1.25, 3.2)
+	end
+
+	if torso and torso:IsA("BasePart") and isFiniteVector3(torso.Position) then
+		local torsoSpan = math.max(torso.Size.X, torso.Size.Z)
+		if torsoSpan > 0.4 then
+			halfWidthWorld = math.clamp(torsoSpan * 0.88, 0.72, 1.35)
+		end
+	end
+
+	local topWorld = Vector3.new(centerRef.Position.X, topYWorld, centerRef.Position.Z)
+	local botWorld = Vector3.new(centerRef.Position.X, bottomYWorld, centerRef.Position.Z)
+
 	local topScreen, topOk = cam:WorldToViewportPoint(topWorld)
-	local botScreen, botOk = cam:WorldToViewportPoint(bottomWorld)
+	local botScreen, botOk = cam:WorldToViewportPoint(botWorld)
 
 	local boxHeight
 	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) and botScreen.Y > topScreen.Y then
 		boxHeight = botScreen.Y - topScreen.Y
 	else
-		boxHeight = (5.2 * projScaleY) / midScreen.Z
+		local worldSpan = math.max(1.2, topYWorld - bottomYWorld)
+		boxHeight = (worldSpan * projScaleY) / centerScreen.Z
 	end
 
 	boxHeight = math.clamp(boxHeight, 10, vp.Y * 0.85)
-	local boxWidth = math.clamp(boxHeight * 0.50, 6, boxHeight * 0.56)
 
-	local centerX = midScreen.X
+	local widthFromWorld = ((halfWidthWorld * 1.45) * projScaleY) / centerScreen.Z
+	local widthFromHeight = boxHeight * 0.48
+	local boxWidth = math.clamp(math.min(widthFromWorld, widthFromHeight * 1.12), 6, boxHeight * 0.55)
+
+	local centerX = centerScreen.X
 	if topOk and botOk and isFiniteNumber(topScreen.X) and isFiniteNumber(botScreen.X) then
-		centerX = (topScreen.X + botScreen.X + midScreen.X) / 3
+		centerX = (topScreen.X + botScreen.X + centerScreen.X) / 3
 	end
 
-	local centerY = midScreen.Y
+	local centerY = centerScreen.Y
 	if topOk and botOk and isFiniteNumber(topScreen.Y) and isFiniteNumber(botScreen.Y) then
 		centerY = (topScreen.Y + botScreen.Y) * 0.5
 	end
