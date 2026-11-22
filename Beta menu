@@ -505,6 +505,19 @@ local function serializeValue(val, depth)
 	return "nil"
 end
 
+local function safeEvalLuaTable(raw)
+	if type(raw) ~= "string" or raw == "" then return nil end
+	local loader = (type(loadstring) == "function" and loadstring) or (type(load) == "function" and load) or nil
+	if not loader then return nil end
+	local okFn, fn = pcall(loader, raw)
+	if not okFn or type(fn) ~= "function" then return nil end
+	local okRun, data = pcall(fn)
+	if okRun and type(data) == "table" then
+		return data
+	end
+	return nil
+end
+
 local function applyConfigTable(tbl)
 	if type(tbl) ~= "table" then return end
 	local defaults = getDefaultConfig()
@@ -560,13 +573,10 @@ local function loadAutoLoadMeta()
 		pcall(function() exists = isfile(AUTO_LOAD_META_FILE) end)
 		if exists then
 			local ok, raw = pcall(readfile, AUTO_LOAD_META_FILE)
-			if ok and type(raw) == "string" and type(loadstring) == "function" then
-				local fn = loadstring(raw)
-				if type(fn) == "function" then
-					local okRun, data = pcall(fn)
-					if okRun and type(data) == "table" then
-						return data.enabled == true, sanitizeSaveName(data.name)
-					end
+			if ok then
+				local data = safeEvalLuaTable(raw)
+				if data then
+					return data.enabled == true, sanitizeSaveName(data.name)
 				end
 			end
 		end
@@ -582,20 +592,17 @@ local function loadConfigByName(rawName, silentMode)
 		pcall(function() exists = isfile(path) end)
 		if exists then
 			local ok, raw = pcall(readfile, path)
-			if ok and type(raw) == "string" and type(loadstring) == "function" then
-				local fn = loadstring(raw)
-				if type(fn) == "function" then
-					local okRun, data = pcall(fn)
-					if okRun and type(data) == "table" then
-						applyConfigTable(data)
-						Config.SaveName = cleanName
-						Config.FakeLag = false
-						releaseFakeLagState()
-						if not silentMode then
-							setSaveStatus("Đã tải save: " .. cleanName, true)
-						end
-						return true
+			if ok then
+				local data = safeEvalLuaTable(raw)
+				if data then
+					applyConfigTable(data)
+					Config.SaveName = cleanName
+					Config.FakeLag = false
+					releaseFakeLagState()
+					if not silentMode then
+						setSaveStatus("Đã tải save: " .. cleanName, true)
 					end
+					return true
 				end
 			end
 		end
@@ -876,26 +883,23 @@ local function pickModelTargetPart(model)
 end
 
 local function mountGui(gui)
-	local mounted = false
+	if not gui then return false end
+	gui.Enabled = true
 	if type(gethui) == "function" then
 		local ok, hui = pcall(gethui)
-		if ok and hui then
-			mounted = pcall(function() gui.Parent = hui end)
+		if ok and hui and pcall(function() gui.Parent = hui end) then
+			return true
 		end
 	end
-	if not mounted then
-		local okCore, core = pcall(function() return game:GetService("CoreGui") end)
-		if okCore and core then
-			mounted = pcall(function() gui.Parent = core end)
-		end
+	local okCore, core = pcall(function() return game:GetService("CoreGui") end)
+	if okCore and core and pcall(function() gui.Parent = core end) then
+		return true
 	end
-	if not mounted then
-		local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
-		if playerGui then
-			mounted = pcall(function() gui.Parent = playerGui end)
-		end
+	local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
+	if playerGui and pcall(function() gui.Parent = playerGui end) then
+		return true
 	end
-	return mounted
+	return false
 end
 
 local MENU_WIDTH = 340
@@ -1391,7 +1395,7 @@ local function updateESPVisuals(cam, originPos)
 	hideUnusedEspEntries(visualIndex + 1)
 end
 
-pcall(function()
+local function buildMenuUI()
 	ScreenGui = Instance.new("ScreenGui")
 	ScreenGui.Name = "SilentAimGeminiGUI"
 	ScreenGui.ResetOnSpawn = false
@@ -1456,6 +1460,7 @@ pcall(function()
 	MainFrame.BackgroundColor3 = COLOR_BG_DARK
 	MainFrame.BorderSizePixel = 0
 	MainFrame.ClipsDescendants = true
+	MainFrame.Visible = true
 	MainFrame.ZIndex = 10
 	MainFrame.Parent = ScreenGui
 
@@ -2009,17 +2014,22 @@ pcall(function()
 		Config.FOVRadius = math.min(450, Config.FOVRadius + 15)
 		updateFOVVisual()
 	end)
+end
 
+local okUi, errUi = pcall(function()
+	buildMenuUI()
 	mountGui(ScreenGui)
 
-	local autoFlag, autoName = loadAutoLoadMeta()
-	if autoFlag then
-		Config.AutoLoadEnabled = true
-		loadConfigByName(autoName, true)
-		if SaveStatusLabel then
-			setSaveStatus("Auto Load: " .. Config.SaveName, true)
+	pcall(function()
+		local autoFlag, autoName = loadAutoLoadMeta()
+		if autoFlag then
+			Config.AutoLoadEnabled = true
+			loadConfigByName(autoName, true)
+			if SaveStatusLabel then
+				setSaveStatus("Auto Load: " .. Config.SaveName, true)
+			end
 		end
-	end
+	end)
 
 	Config.FakeLag = false
 	releaseFakeLagState()
@@ -2029,7 +2039,12 @@ pcall(function()
 	syncAllUiTexts()
 	applyFarRenderState(Config.FarRender)
 	syncFakeLagEnemies(Config.FakeLag)
+	applyMenuVisibilityAndMinimize()
 end)
+
+if not okUi then
+	warn("[SilentAimGemini] UI init error: " .. tostring(errUi))
+end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
