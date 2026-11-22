@@ -22,6 +22,7 @@ end
 local AIM_TARGET_MODES = { "Player + NPC", "Player", "NPC" }
 local TARGET_PART_MODES = { "Head", "HumanoidRootPart", "Random" }
 local HEADSHOT_CHANCE_PRESETS = { 25, 50, 75, 100 }
+local STANCE_MODES = { "Tắt", "Đứng", "Ngồi", "Nằm" }
 local TABS = { "Silent Aim", "ESP", "Settings" }
 
 local SAVE_FOLDER = "SilentAimGeminiSaves"
@@ -53,6 +54,9 @@ local function getDefaultConfig()
 		FarRender = false,
 		TriggerBot = false,
 		TriggerBotWallCheck = true,
+		StanceMode = "Tắt",
+		InfiniteStamina = false,
+		SafeInvisible = false,
 		ESPEnabled = true,
 		ESPBox = true,
 		ESPHealthBar = true,
@@ -70,7 +74,7 @@ local Config = getDefaultConfig()
 local ScreenGui, FOVFrame, TriggerFOVFrame, ESPContainer, FOVLabel, TriggerFOVLabel, ESPDistLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
 local PageFrames = {}
 local TabButtons = {}
-local ToggleSilentBtn, FakeLagBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
+local ToggleSilentBtn, FakeLagBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, StanceModeBtn, InfiniteStaminaBtn, SafeInvisibleBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
 local mainStroke
 local EspVisualPool = {}
 
@@ -113,6 +117,7 @@ local lastEspRenderTime = 0
 local lastPlayerSetRebuildTime = 0
 local lastWeaponRangeSyncTime = 0
 local lastFakeLagSyncTime = 0
+local lastMovementSyncTime = 0
 local isTriggerBurstBusy = false
 local elapsedClock = 0
 local isScanningNpc = false
@@ -122,6 +127,13 @@ local PlayerCharacterSet = {}
 local FakeLagFrozenParts = {}
 local FakeLagPendingShots = {}
 local FakeLagWasActive = false
+
+local StanceBackup = {
+	Active = false,
+	HipHeight = nil
+}
+local InvisBackup = {}
+local InvisApplied = false
 
 local OriginalRenderState = {
 	Captured = false,
@@ -264,6 +276,163 @@ local function syncFakeLagEnemies(enabled)
 			FakeLagFrozenParts[part] = nil
 		end
 	end
+end
+
+local function restoreStanceState()
+	local char = LocalPlayer and LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and StanceBackup.Active and StanceBackup.HipHeight ~= nil then
+		pcall(function()
+			hum.HipHeight = StanceBackup.HipHeight
+			if Config.StanceMode == "Tắt" then
+				hum.Sit = false
+			end
+		end)
+	end
+	StanceBackup.Active = false
+	StanceBackup.HipHeight = nil
+end
+
+local function applyStanceMode()
+	local mode = Config.StanceMode or "Tắt"
+	local char = LocalPlayer and LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return end
+
+	if mode == "Tắt" then
+		restoreStanceState()
+		return
+	end
+
+	if not StanceBackup.Active then
+		StanceBackup.Active = true
+		StanceBackup.HipHeight = hum.HipHeight
+	end
+
+	local baseHip = StanceBackup.HipHeight or hum.HipHeight or 2
+	pcall(function()
+		if mode == "Đứng" then
+			hum.Sit = false
+			hum.HipHeight = baseHip
+		elseif mode == "Ngồi" then
+			hum.Sit = true
+			hum.HipHeight = math.max(0.5, baseHip * 0.65)
+		elseif mode == "Nằm" then
+			hum.Sit = false
+			hum.HipHeight = 0.25
+		end
+	end)
+end
+
+local STAMINA_KEYS = { "stamina", "energy", "sprint", "breath", "thirst", "fatigue" }
+local MAX_STAMINA_KEYS = { "maxstamina", "maxenergy", "maxsprint", "maxbreath", "maxfatigue" }
+
+local function applyInfiniteStamina()
+	if not Config.InfiniteStamina then return end
+	local char = LocalPlayer and LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+	local function boostContainer(container)
+		if not container then return end
+		pcall(function()
+			for attrName, attrVal in pairs(container:GetAttributes()) do
+				if typeof(attrVal) == "number" and isFiniteNumber(attrVal) then
+					local lower = string.lower(tostring(attrName))
+					for _, k in ipairs(STAMINA_KEYS) do
+						if string.find(lower, k, 1, true) and attrVal < 100 then
+							container:SetAttribute(attrName, 100)
+						end
+					end
+					for _, mk in ipairs(MAX_STAMINA_KEYS) do
+						if string.find(lower, mk, 1, true) and attrVal < 100 then
+							container:SetAttribute(attrName, 100)
+						end
+					end
+				end
+			end
+			for _, desc in ipairs(container:GetDescendants()) do
+				if desc:IsA("NumberValue") or desc:IsA("IntValue") then
+					local lower = string.lower(desc.Name)
+					for _, k in ipairs(STAMINA_KEYS) do
+						if string.find(lower, k, 1, true) and desc.Value < 100 then
+							desc.Value = 100
+						end
+					end
+				end
+			end
+		end)
+	end
+
+	boostContainer(LocalPlayer)
+	boostContainer(char)
+
+	if hum and hum.Health > 0 and hum.WalkSpeed < 16 then
+		pcall(function()
+			hum.WalkSpeed = 16
+		end)
+	end
+end
+
+local function restoreSafeInvisible()
+	for obj, prev in pairs(InvisBackup) do
+		if obj and obj.Parent then
+			pcall(function()
+				if obj:IsA("BasePart") then
+					obj.LocalTransparencyModifier = prev.LocalTransparencyModifier or 0
+					if prev.CanTouch ~= nil then obj.CanTouch = prev.CanTouch end
+					if prev.CanQuery ~= nil then obj.CanQuery = prev.CanQuery end
+				elseif obj:IsA("Decal") or obj:IsA("Texture") then
+					obj.Transparency = prev.Transparency or 0
+				elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") then
+					obj.Enabled = prev.Enabled ~= false
+				end
+			end)
+		end
+		InvisBackup[obj] = nil
+	end
+	InvisApplied = false
+end
+
+local function applySafeInvisible(enabled)
+	if not enabled then
+		if InvisApplied or next(InvisBackup) ~= nil then
+			restoreSafeInvisible()
+		end
+		return
+	end
+
+	local char = LocalPlayer and LocalPlayer.Character
+	if not char then return end
+	InvisApplied = true
+
+	pcall(function()
+		for _, desc in ipairs(char:GetDescendants()) do
+			if desc:IsA("BasePart") then
+				if desc.Name ~= "HumanoidRootPart" then
+					if not InvisBackup[desc] then
+						InvisBackup[desc] = {
+							LocalTransparencyModifier = desc.LocalTransparencyModifier,
+							CanTouch = desc.CanTouch,
+							CanQuery = desc.CanQuery
+						}
+					end
+					desc.LocalTransparencyModifier = 1
+					desc.CanTouch = false
+					desc.CanQuery = false
+				end
+			elseif desc:IsA("Decal") or desc:IsA("Texture") then
+				if not InvisBackup[desc] then
+					InvisBackup[desc] = { Transparency = desc.Transparency }
+				end
+				desc.Transparency = 1
+			elseif desc:IsA("ParticleEmitter") or desc:IsA("Beam") or desc:IsA("Trail") then
+				if not InvisBackup[desc] then
+					InvisBackup[desc] = { Enabled = desc.Enabled }
+				end
+				desc.Enabled = false
+			end
+		end
+	end)
 end
 
 local function detectServerWeaponRange()
@@ -652,6 +821,9 @@ local function getSevenFingerText() return Config.SevenFingerGesture and "7 ngó
 local function getFarRenderText() return Config.FarRender and "Nhìn map xa: BẬT" or "Nhìn map xa: TẮT" end
 local function getTriggerBotText() return Config.TriggerBot and "Tự bắn khi chỉ địch: BẬT" or "Tự bắn khi chỉ địch: TẮT" end
 local function getTriggerWallText() return Config.TriggerBotWallCheck and "WallCheck tự bắn: BẬT" or "WallCheck tự bắn: TẮT" end
+local function getStanceModeText() return "Tư thế: " .. tostring(Config.StanceMode or "Tắt") end
+local function getInfiniteStaminaText() return Config.InfiniteStamina and "Vô hạn thể lực: BẬT" or "Vô hạn thể lực: TẮT" end
+local function getSafeInvisibleText() return Config.SafeInvisible and "Tàn hình an toàn: BẬT" or "Tàn hình an toàn: TẮT" end
 local function getESPEnabledText() return Config.ESPEnabled and "ESP Tổng: BẬT" or "ESP Tổng: TẮT" end
 local function getESPBoxText() return Config.ESPBox and "ESP Box 2D: BẬT" or "ESP Box 2D: TẮT" end
 local function getESPHealthText() return Config.ESPHealthBar and "Thanh máu dọc: BẬT" or "Thanh máu dọc: TẮT" end
@@ -749,6 +921,18 @@ local function syncAllUiTexts()
 	if FarRenderBtn then
 		FarRenderBtn.Text = getFarRenderText()
 		FarRenderBtn.BackgroundColor3 = Config.FarRender and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if StanceModeBtn then
+		StanceModeBtn.Text = getStanceModeText()
+		StanceModeBtn.BackgroundColor3 = (Config.StanceMode ~= "Tắt") and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if InfiniteStaminaBtn then
+		InfiniteStaminaBtn.Text = getInfiniteStaminaText()
+		InfiniteStaminaBtn.BackgroundColor3 = Config.InfiniteStamina and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
+	if SafeInvisibleBtn then
+		SafeInvisibleBtn.Text = getSafeInvisibleText()
+		SafeInvisibleBtn.BackgroundColor3 = Config.SafeInvisible and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end
 	if TriggerBotBtn then
 		TriggerBotBtn.Text = getTriggerBotText()
@@ -1753,11 +1937,14 @@ pcall(function()
 	AutoSeatBtn = createButton(settingsPage, getAutoSeatText(), 3)
 	SevenFingerBtn = createButton(settingsPage, getSevenFingerText(), 4)
 	FarRenderBtn = createButton(settingsPage, getFarRenderText(), 5)
+	StanceModeBtn = createButton(settingsPage, getStanceModeText(), 6)
+	InfiniteStaminaBtn = createButton(settingsPage, getInfiniteStaminaText(), 7)
+	SafeInvisibleBtn = createButton(settingsPage, getSafeInvisibleText(), 8)
 
 	local saveNameRow = Instance.new("Frame")
 	saveNameRow.Size = UDim2.new(1, 0, 0, 30)
 	saveNameRow.BackgroundColor3 = COLOR_ITEM_DARK
-	saveNameRow.LayoutOrder = 6
+	saveNameRow.LayoutOrder = 9
 	saveNameRow.ZIndex = 12
 	saveNameRow.Parent = settingsPage
 
@@ -1800,11 +1987,11 @@ pcall(function()
 	boxCorner.CornerRadius = UDim.new(0, 4)
 	boxCorner.Parent = SaveNameBox
 
-	SaveBtn = createButton(settingsPage, "Lưu Save theo tên", 7)
-	AutoLoadToggleBtn = createButton(settingsPage, getAutoLoadText(), 8)
-	DeleteSaveBtn = createButton(settingsPage, "Xóa Save theo tên", 9)
-	ResetBtn = createButton(settingsPage, "Reset về ban đầu", 10)
-	DebugLogBtn = createButton(settingsPage, "Debug Log: TẮT", 11)
+	SaveBtn = createButton(settingsPage, "Lưu Save theo tên", 10)
+	AutoLoadToggleBtn = createButton(settingsPage, getAutoLoadText(), 11)
+	DeleteSaveBtn = createButton(settingsPage, "Xóa Save theo tên", 12)
+	ResetBtn = createButton(settingsPage, "Reset về ban đầu", 13)
+	DebugLogBtn = createButton(settingsPage, "Debug Log: TẮT", 14)
 
 	SaveStatusLabel = Instance.new("TextLabel")
 	SaveStatusLabel.Size = UDim2.new(1, 0, 0, 20)
@@ -1813,7 +2000,7 @@ pcall(function()
 	SaveStatusLabel.TextColor3 = Color3.fromRGB(165, 170, 180)
 	SaveStatusLabel.Font = Enum.Font.Gotham
 	SaveStatusLabel.TextSize = 11
-	SaveStatusLabel.LayoutOrder = 12
+	SaveStatusLabel.LayoutOrder = 15
 	SaveStatusLabel.ZIndex = 12
 	SaveStatusLabel.Parent = settingsPage
 
@@ -1938,6 +2125,24 @@ pcall(function()
 		FarRenderBtn.BackgroundColor3 = Config.FarRender and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 		applyFarRenderState(Config.FarRender)
 	end)
+	StanceModeBtn.MouseButton1Click:Connect(function()
+		Config.StanceMode = cyclePreset(STANCE_MODES, Config.StanceMode, "Tắt")
+		StanceModeBtn.Text = getStanceModeText()
+		StanceModeBtn.BackgroundColor3 = (Config.StanceMode ~= "Tắt") and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+		applyStanceMode()
+	end)
+	InfiniteStaminaBtn.MouseButton1Click:Connect(function()
+		Config.InfiniteStamina = not Config.InfiniteStamina
+		InfiniteStaminaBtn.Text = getInfiniteStaminaText()
+		InfiniteStaminaBtn.BackgroundColor3 = Config.InfiniteStamina and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+		applyInfiniteStamina()
+	end)
+	SafeInvisibleBtn.MouseButton1Click:Connect(function()
+		Config.SafeInvisible = not Config.SafeInvisible
+		SafeInvisibleBtn.Text = getSafeInvisibleText()
+		SafeInvisibleBtn.BackgroundColor3 = Config.SafeInvisible and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+		applySafeInvisible(Config.SafeInvisible)
+	end)
 	TriggerBotBtn.MouseButton1Click:Connect(function()
 		Config.TriggerBot = not Config.TriggerBot
 		TriggerBotBtn.Text = getTriggerBotText()
@@ -1975,6 +2180,8 @@ pcall(function()
 		userDesiredEnabled = Config.Enabled
 		pausedByVehicle = false
 		releaseFakeLagState()
+		restoreStanceState()
+		restoreSafeInvisible()
 		syncAllUiTexts()
 		applyFarRenderState(false)
 		setSaveStatus("Đã reset về mặc định", true)
@@ -2016,6 +2223,9 @@ pcall(function()
 	syncAllUiTexts()
 	applyFarRenderState(Config.FarRender)
 	syncFakeLagEnemies(Config.FakeLag)
+	applyStanceMode()
+	applyInfiniteStamina()
+	applySafeInvisible(Config.SafeInvisible)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -2387,6 +2597,17 @@ RunService.RenderStepped:Connect(function(dt)
 			end
 		elseif FakeLagWasActive or next(FakeLagFrozenParts) ~= nil or #FakeLagPendingShots > 0 then
 			syncFakeLagEnemies(false)
+		end
+
+		if elapsedClock - lastMovementSyncTime >= 0.12 then
+			lastMovementSyncTime = elapsedClock
+			applyStanceMode()
+			applyInfiniteStamina()
+			if Config.SafeInvisible then
+				applySafeInvisible(true)
+			elseif InvisApplied or next(InvisBackup) ~= nil then
+				applySafeInvisible(false)
+			end
 		end
 
 		if elapsedClock - lastSeatCheckTime >= 0.1 then
