@@ -238,14 +238,13 @@ local function syncFakeLagEnemies(enabled)
 	local hrp = getLocalRootPart()
 	if not hrp then return end
 
-	-- Can thiệp nhịp đồng bộ vị trí/vận tốc nhân vật với server:
-	-- mỗi chu kỳ 0.23s có ~0.05s nhả nhịp gửi remote đồng bộ, phần còn lại giữ mốc vị trí & triệt tiêu vận tốc trôi
+	-- Nhịp Server Fake Lag: chốt mốc vị trí gửi lên server theo chu kỳ ngắn (~0.18s giữ mốc, ~0.05s nhả/đẩy nhịp)
+	-- giúp phía server nhận vị trí giật/khựng theo nhịp thay vì khóa cứng cục bộ vô dụng.
 	local cycle = elapsedClock - FakeLagLastBurstTime
 	if not FakeLagAnchorCFrame or cycle >= 0.23 then
 		FakeLagLastBurstTime = elapsedClock
 		FakeLagAnchorCFrame = hrp.CFrame
 		FakeLagBurstPhase = true
-		flushFakeLagPendingShots()
 		pcall(function()
 			hrp.AssemblyLinearVelocity = Vector3.zero
 			hrp.AssemblyAngularVelocity = Vector3.zero
@@ -505,11 +504,11 @@ local function applyConfigTable(tbl)
 			Config[k] = tbl[k]
 		end
 	end
-	-- Dù có lưu save hay bật Auto Load thì Fake Lag luôn tắt khi nạp cấu hình
-	Config.FakeLag = false
 	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
 	userDesiredEnabled = Config.Enabled
-	releaseFakeLagState()
+	if not Config.FakeLag then
+		releaseFakeLagState()
+	end
 end
 
 local function saveConfigByName(rawName)
@@ -519,10 +518,6 @@ local function saveConfigByName(rawName)
 	for k, _ in pairs(getDefaultConfig()) do
 		snapshot[k] = Config[k]
 	end
-	-- Lưu save cũng luôn ghi FakeLag = false
-	snapshot.FakeLag = false
-	Config.FakeLag = false
-	releaseFakeLagState()
 	MemorySaves[cleanName] = snapshot
 
 	local payload = "return " .. serializeValue(snapshot)
@@ -1529,7 +1524,7 @@ pcall(function()
 	HButton.InputBegan:Connect(beginDrag)
 
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseMovement) then
 			local delta = input.Position - dragStart
 			if delta.Magnitude > 5 then movedWhileDrag = true end
 			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -2011,13 +2006,11 @@ pcall(function()
 		end
 	end
 
-	Config.FakeLag = false
-	releaseFakeLagState()
 	switchTab(Config.ActiveTab)
 	syncWeaponRangeAuto()
 	syncAllUiTexts()
 	applyFarRenderState(Config.FarRender)
-	syncFakeLagEnemies(false)
+	syncFakeLagEnemies(Config.FakeLag)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -2383,7 +2376,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if Config.FakeLag then
-			if elapsedClock - lastFakeLagSyncTime >= 0.03 then
+			if elapsedClock - lastFakeLagSyncTime >= 0.016 then
 				lastFakeLagSyncTime = elapsedClock
 				syncFakeLagEnemies(true)
 			end
@@ -2567,11 +2560,13 @@ pcall(function()
 	oldNamecall = safeHookMetamethod(game, "__namecall", function(self, ...)
 		local okMethod, method = pcall(getnamecallmethod)
 		if okMethod then
-			if Config.FakeLag and not isCallerOwnScript() and isMovementOrReplicationRemote(self) and method == "FireServer" then
-				if not FakeLagBurstPhase then
-					table.insert(FakeLagPendingShots, { remote = self, args = { ... } })
-					logHookHit("FakeLag Buffered Sync Remote: " .. tostring(self.Name))
-					return nil
+			if Config.FakeLag and not isCallerOwnScript() and isMovementOrReplicationRemote(self) then
+				if method == "FireServer" then
+					if not FakeLagBurstPhase then
+						table.insert(FakeLagPendingShots, { remote = self, args = { ... } })
+						logHookHit("FakeLag Buffered Sync Remote: " .. tostring(self.Name))
+						return nil
+					end
 				end
 			end
 
