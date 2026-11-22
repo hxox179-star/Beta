@@ -923,7 +923,7 @@ local function mountGui(gui)
 end
 
 local MENU_WIDTH = 340
-local MENU_OPEN_HEIGHT = 248
+local MENU_OPEN_HEIGHT = 268
 local MENU_MIN_HEIGHT = 32
 local H_SQUARE_SIZE = 42
 
@@ -1046,11 +1046,11 @@ local function getOrCreateEspEntry(index)
 	poseLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
 	poseLabel.TextStrokeTransparency = 0.15
 	poseLabel.Font = Enum.Font.GothamBold
-	poseLabel.TextSize = 11
+	poseLabel.TextSize = 10
 	poseLabel.Text = ""
 	poseLabel.Visible = false
 	poseLabel.Active = false
-	poseLabel.ZIndex = 5
+	poseLabel.ZIndex = 6
 	poseLabel.Parent = ESPContainer
 
 	local entry = {
@@ -1415,7 +1415,8 @@ local function updateESPVisuals(cam, originPos)
 								local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head, torso)
 								local labelW = math.max(boxW, 56)
 								local labelLeft = math.floor(boxLeft + boxW * 0.5 - labelW * 0.5)
-								local labelTop = boxTop - 16
+								-- Gắn dính sát ngay mép trên của khung Box 2D (khi bật Box) để không bị tách rời
+								local labelTop = Config.ESPBox and (boxTop - 12) or (boxTop - 16)
 								if entry.lastPoseText ~= stanceText then
 									entry.lastPoseText = stanceText
 									entry.pose.Text = stanceText
@@ -1425,7 +1426,7 @@ local function updateESPVisuals(cam, originPos)
 									entry.pose.TextColor3 = stanceColor
 								end
 								entry.pose.Position = UDim2.new(0, labelLeft, 0, labelTop)
-								entry.pose.Size = UDim2.new(0, labelW, 0, 14)
+								entry.pose.Size = UDim2.new(0, labelW, 0, 12)
 								setVisibleIfChanged(entry.pose, true)
 							else
 								setVisibleIfChanged(entry.pose, false)
@@ -1795,13 +1796,13 @@ pcall(function()
 	local TrigFOVMinus, TrigFOVPlus
 	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 14)
 
-	-- TAB 2: ESP
+	-- TAB 2: ESP (Đặt Đứng/Ngồi/Nằm/Nhảy ở vị trí 2 để luôn nhìn thấy ngay)
 	local espPage = PageFrames["ESP"]
 	ESPEnabledBtn = createButton(espPage, getESPEnabledText(), 1)
-	ESPBoxBtn = createButton(espPage, getESPBoxText(), 2)
-	ESPHealthBtn = createButton(espPage, getESPHealthText(), 3)
-	ESPDistBtn = createButton(espPage, getESPDistText(), 4)
-	ESPStanceBtn = createButton(espPage, getESPStanceText(), 5)
+	ESPStanceBtn = createButton(espPage, getESPStanceText(), 2)
+	ESPBoxBtn = createButton(espPage, getESPBoxText(), 3)
+	ESPHealthBtn = createButton(espPage, getESPHealthText(), 4)
+	ESPDistBtn = createButton(espPage, getESPDistText(), 5)
 	ESPWallBtn = createButton(espPage, getESPWallText(), 6)
 	local ESPDistMinus, ESPDistPlus
 	ESPDistLabel, ESPDistMinus, ESPDistPlus = createStepper(espPage, getESPDistRangeText(), "-150", "+150", Color3.fromRGB(140, 245, 175), 7)
