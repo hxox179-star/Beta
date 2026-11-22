@@ -188,9 +188,6 @@ local function releaseFakeLagState()
 		if part and part.Parent and part:IsA("BasePart") then
 			pcall(function()
 				part.Anchored = state.Anchored == true
-				if state.CFrame and isFiniteVector3(state.CFrame.Position) then
-					part.CFrame = state.CFrame
-				end
 				if state.Velocity and isFiniteVector3(state.Velocity) then
 					part.AssemblyLinearVelocity = state.Velocity
 				end
@@ -227,22 +224,11 @@ local function syncFakeLagEnemies(enabled)
 						CFrame = desc.CFrame,
 						Velocity = desc.AssemblyLinearVelocity
 					}
-					pcall(function()
-						desc.AssemblyLinearVelocity = Vector3.zero
-						desc.AssemblyAngularVelocity = Vector3.zero
-						desc.Anchored = true
-					end)
-				else
-					local saved = FakeLagFrozenParts[desc]
-					if saved and saved.CFrame and isFiniteVector3(saved.CFrame.Position) then
-						pcall(function()
-							desc.AssemblyLinearVelocity = Vector3.zero
-							desc.AssemblyAngularVelocity = Vector3.zero
-							desc.Anchored = true
-							desc.CFrame = saved.CFrame
-						end)
-					end
 				end
+				pcall(function()
+					desc.AssemblyLinearVelocity = Vector3.zero
+					desc.AssemblyAngularVelocity = Vector3.zero
+				end)
 			end
 		end
 	end
@@ -1164,99 +1150,34 @@ local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, 
 		return nil
 	end
 
-	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("Torso")
-	local legNames = {
-		"LeftFoot", "RightFoot",
-		"LeftLowerLeg", "RightLowerLeg",
-		"LeftUpperLeg", "RightUpperLeg",
-		"Left Leg", "Right Leg"
-	}
-
-	local minX, maxX = math.huge, -math.huge
-	local minY, maxY = math.huge, -math.huge
-	local minZ, maxZ = math.huge, -math.huge
-	local hasBodyBounds = false
-
-	local function includePartBounds(p, expandYTop, expandYBot, expandSide)
-		if not p or not p:IsA("BasePart") or not isFiniteVector3(p.Position) then return end
-		local sx = p.Size.X * 0.5 * (expandSide or 1.0)
-		local syTop = p.Size.Y * 0.5 * (expandYTop or 1.0)
-		local syBot = p.Size.Y * 0.5 * (expandYBot or 1.0)
-		local sz = p.Size.Z * 0.5 * (expandSide or 1.0)
-		local pos = p.Position
-
-		minX = math.min(minX, pos.X - sx)
-		maxX = math.max(maxX, pos.X + sx)
-		minY = math.min(minY, pos.Y - syBot)
-		maxY = math.max(maxY, pos.Y + syTop)
-		minZ = math.min(minZ, pos.Z - sz)
-		maxZ = math.max(maxZ, pos.Z + sz)
-		hasBodyBounds = true
-	end
-
-	if head and head:IsA("BasePart") then
-		includePartBounds(head, 1.15, 1.0, 1.15)
-	end
-	if torso and torso:IsA("BasePart") then
-		includePartBounds(torso, 1.0, 1.0, 1.15)
-	end
-	for _, n in ipairs(legNames) do
-		local lp = model:FindFirstChild(n)
-		if lp and lp:IsA("BasePart") then
-			includePartBounds(lp, 1.0, 1.05, 1.1)
-		end
-	end
-
-	local basePos = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
 	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
+	local centerWorld = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
 
-	if not hasBodyBounds then
-		local topEst = (head and head:IsA("BasePart") and isFiniteVector3(head.Position)) and (head.Position.Y + head.Size.Y * 0.6) or (basePos.Y + 2.2)
-		local botEst = basePos.Y - math.clamp(hipHeight + 0.65, 1.4, 3.5)
-		minX, maxX = basePos.X - 1.1, basePos.X + 1.1
-		minY, maxY = math.min(botEst, topEst - 1.2), math.max(topEst, botEst + 1.2)
-		minZ, maxZ = basePos.Z - 1.0, basePos.Z + 1.0
+	local topWorld
+	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+		topWorld = Vector3.new(head.Position.X, head.Position.Y + head.Size.Y * 0.55 + 0.15, head.Position.Z)
 	else
-		if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-			maxY = math.max(maxY, head.Position.Y + head.Size.Y * 0.55)
-		end
+		topWorld = centerWorld + Vector3.new(0, math.max(1.8, hipHeight + 1.1), 0)
 	end
 
-	local corners = {
-		Vector3.new(minX, minY, minZ), Vector3.new(minX, minY, maxZ),
-		Vector3.new(minX, maxY, minZ), Vector3.new(minX, maxY, maxZ),
-		Vector3.new(maxX, minY, minZ), Vector3.new(maxX, minY, maxZ),
-		Vector3.new(maxX, maxY, minZ), Vector3.new(maxX, maxY, maxZ),
-	}
+	local botWorld = Vector3.new(centerWorld.X, centerWorld.Y - math.max(1.6, hipHeight + 0.85), centerWorld.Z)
 
-	local sMinX, sMaxX = math.huge, -math.huge
-	local sMinY, sMaxY = math.huge, -math.huge
-	local anyInFront = false
+	local topScreen, topVis = cam:WorldToViewportPoint(topWorld)
+	local botScreen, botVis = cam:WorldToViewportPoint(botWorld)
+	local centerScreen, centerVis = cam:WorldToViewportPoint(centerWorld)
 
-	for _, c in ipairs(corners) do
-		local sp, ok = cam:WorldToViewportPoint(c)
-		if isFiniteNumber(sp.Z) and sp.Z > 0.1 and isFiniteNumber(sp.X) and isFiniteNumber(sp.Y) then
-			anyInFront = true
-			if ok or (sp.X >= -vp.X * 0.5 and sp.X <= vp.X * 1.5 and sp.Y >= -vp.Y * 0.5 and sp.Y <= vp.Y * 1.5) then
-				sMinX = math.min(sMinX, sp.X)
-				sMaxX = math.max(sMaxX, sp.X)
-				sMinY = math.min(sMinY, sp.Y)
-				sMaxY = math.max(sMaxY, sp.Y)
-			end
-		end
+	if not (topVis or botVis or centerVis) then
+		return nil
 	end
-
-	if not anyInFront or sMinX == math.huge or sMinY == math.huge then
+	if not (isFiniteNumber(centerScreen.Z) and centerScreen.Z > 0.1) then
 		return nil
 	end
 
-	local boxW = math.floor(math.clamp(sMaxX - sMinX, 6, vp.X * 0.7) + 0.5)
-	local boxH = math.floor(math.clamp(sMaxY - sMinY, 8, vp.Y * 0.9) + 0.5)
-	local centerX = (sMinX + sMaxX) * 0.5
-	local centerY = (sMinY + sMaxY) * 0.5
+	local boxH = math.floor(math.clamp(math.abs(botScreen.Y - topScreen.Y), 8, vp.Y * 0.9) + 0.5)
+	local boxW = math.floor(math.clamp(boxH * 0.55, 6, vp.X * 0.7) + 0.5)
 
-	local boxLeft = math.floor(centerX - boxW * 0.5 + 0.5)
-	local boxTop = math.floor(centerY - boxH * 0.5 + 0.5)
+	local boxLeft = math.floor(centerScreen.X - boxW * 0.5 + 0.5)
+	local boxTop = math.floor(topScreen.Y + 0.5)
 
 	return boxLeft, boxTop, boxW, boxH
 end
@@ -1418,7 +1339,7 @@ pcall(function()
 	ScreenGui = Instance.new("ScreenGui")
 	ScreenGui.Name = "SilentAimGeminiGUI"
 	ScreenGui.ResetOnSpawn = false
-	ScreenGui.IgnoreGuiInset = false
+	ScreenGui.IgnoreGuiInset = true
 	ScreenGui.DisplayOrder = 20
 	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
@@ -2542,20 +2463,6 @@ local function isSuspiciousClientRemote(inst)
 	return false
 end
 
-local function isWeaponDamageOrHitRemote(inst)
-	if not inst or not (inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction")) then
-		return false
-	end
-	local lowerName = string.lower(inst.Name or "")
-	local keys = { "hit", "damage", "dmg", "shoot", "fire", "bullet", "hurt", "attack", "gun" }
-	for _, k in ipairs(keys) do
-		if string.find(lowerName, k, 1, true) then
-			return true
-		end
-	end
-	return false
-end
-
 pcall(function()
 	if hookfunction and LocalPlayer and type(LocalPlayer.Kick) == "function" then
 		local oldKick
@@ -2622,18 +2529,6 @@ pcall(function()
 						logHookHit("Blocked suspicious remote: " .. tostring(self.Name))
 						return nil
 					end
-				end
-			end
-
-			if Config.FakeLag and (method == "FireServer" or method == "InvokeServer") and isWeaponDamageOrHitRemote(self) and not isCallerOwnScript() then
-				if #FakeLagPendingShots < 180 then
-					table.insert(FakeLagPendingShots, {
-						remote = self,
-						method = method,
-						args = { ... }
-					})
-					logHookHit("Queued FakeLag shot: " .. tostring(self.Name))
-					return nil
 				end
 			end
 
