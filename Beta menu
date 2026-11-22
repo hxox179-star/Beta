@@ -126,6 +126,7 @@ local FakeLagWasActive = false
 local EspCandidatesBuf = {}
 local EspSeenModelsBuf = {}
 local EspWallCache = {}
+local ModelRigCache = setmetatable({}, { __mode = "k" })
 
 local OriginalRenderState = {
 	Captured = false,
@@ -151,6 +152,29 @@ local function isFiniteVector3(v)
 		and isFiniteNumber(v.X)
 		and isFiniteNumber(v.Y)
 		and isFiniteNumber(v.Z)
+end
+
+local function getModelRigParts(model, hum)
+	if not model then return nil, nil, nil, nil end
+	local cached = ModelRigCache[model]
+	if cached and (elapsedClock - cached.t) < 0.35 then
+		return cached.hrp, cached.head, cached.torso, cached.anchor
+	end
+	local hrp = model:FindFirstChild("HumanoidRootPart")
+	local head = model:FindFirstChild("Head")
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+	local anchor = (hrp and hrp:IsA("BasePart") and hrp)
+		or (torso and torso:IsA("BasePart") and torso)
+		or (head and head:IsA("BasePart") and head)
+		or nil
+	ModelRigCache[model] = {
+		hrp = hrp,
+		head = head,
+		torso = torso,
+		anchor = anchor,
+		t = elapsedClock
+	}
+	return hrp, head, torso, anchor
 end
 
 local function isCallerOwnScript()
@@ -949,6 +973,12 @@ local function applyMenuVisibilityAndMinimize()
 	end
 end
 
+local function setVisibleIfChanged(inst, vis)
+	if inst and inst.Visible ~= vis then
+		inst.Visible = vis
+	end
+end
+
 local function getOrCreateEspEntry(index)
 	if EspVisualPool[index] then
 		return EspVisualPool[index]
@@ -966,7 +996,7 @@ local function getOrCreateEspEntry(index)
 
 	local boxStroke = Instance.new("UIStroke")
 	boxStroke.Color = COLOR_ESP_CLEAR_GREEN
-	boxStroke.Thickness = 1.6
+	boxStroke.Thickness = 1.4
 	boxStroke.Parent = boxFrame
 
 	local hpBg = Instance.new("Frame")
@@ -1023,7 +1053,17 @@ local function getOrCreateEspEntry(index)
 		hpBg = hpBg,
 		hpFill = hpFill,
 		dist = distLabel,
-		pose = poseLabel
+		pose = poseLabel,
+		lastBoxX = nil,
+		lastBoxY = nil,
+		lastBoxW = nil,
+		lastBoxH = nil,
+		lastBoxColor = nil,
+		lastHpRatio = nil,
+		lastHpColor = nil,
+		lastDistText = nil,
+		lastPoseText = nil,
+		lastPoseColor = nil
 	}
 	EspVisualPool[index] = entry
 	return entry
@@ -1033,20 +1073,19 @@ local function hideUnusedEspEntries(startIndex)
 	for i = startIndex, #EspVisualPool do
 		local entry = EspVisualPool[i]
 		if entry then
-			if entry.box then entry.box.Visible = false end
-			if entry.hpBg then entry.hpBg.Visible = false end
-			if entry.dist then entry.dist.Visible = false end
-			if entry.pose then entry.pose.Visible = false end
+			setVisibleIfChanged(entry.box, false)
+			setVisibleIfChanged(entry.hpBg, false)
+			setVisibleIfChanged(entry.dist, false)
+			setVisibleIfChanged(entry.pose, false)
 		end
 	end
 end
 
-local function getEnemyStanceLabel(model, hum, hrp, head)
+local function getEnemyStanceLabel(model, hum, hrp, head, torso)
 	if not model or not hum then
 		return "ĐỨNG", Color3.fromRGB(245, 248, 255)
 	end
 
-	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
 	local anchorPart = (torso and torso:IsA("BasePart") and torso)
 		or (hrp and hrp:IsA("BasePart") and hrp)
 		or (head and head:IsA("BasePart") and head)
@@ -1145,7 +1184,7 @@ end
 
 local function getCachedEspWallBlocked(model, anchor, hum)
 	local cached = EspWallCache[model]
-	if cached and (elapsedClock - cached.t) < 0.14 then
+	if cached and (elapsedClock - cached.t) < 0.28 then
 		return cached.blocked
 	end
 	local blocked = checkWallOcclusion(model, anchor, anchor.Position, hum)
@@ -1178,54 +1217,32 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
-local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
+local function getCompactCharacterScreenBox(model, hum, hrp, head, torso, anchor, cam, vp)
 	if not model or not cam or not anchor or not isFiniteVector3(anchor.Position) then
 		return nil
-	end
-
-	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("Torso")
-	local limbNames = {
-		"LeftFoot", "RightFoot",
-		"LeftLowerLeg", "RightLowerLeg",
-		"LeftUpperLeg", "RightUpperLeg",
-		"Left Leg", "Right Leg"
-	}
-
-	local highestY = -math.huge
-	local lowestY = math.huge
-	local foundPart = false
-
-	local function scanPartVertical(p, topPad, botPad)
-		if not p or not p:IsA("BasePart") or not isFiniteVector3(p.Position) then return end
-		local halfY = p.Size.Y * 0.5
-		highestY = math.max(highestY, p.Position.Y + halfY + (topPad or 0))
-		lowestY = math.min(lowestY, p.Position.Y - halfY - (botPad or 0))
-		foundPart = true
-	end
-
-	if head and head:IsA("BasePart") then
-		scanPartVertical(head, 0.12, 0.0)
-	end
-	if torso and torso:IsA("BasePart") then
-		scanPartVertical(torso, 0.0, 0.0)
-	end
-	for _, n in ipairs(limbNames) do
-		local lp = model:FindFirstChild(n)
-		if lp and lp:IsA("BasePart") then
-			scanPartVertical(lp, 0.0, 0.08)
-		end
 	end
 
 	local centerWorld = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
 	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
 
-	if not foundPart then
+	local highestY = -math.huge
+	local lowestY = math.huge
+	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
+		highestY = math.max(highestY, head.Position.Y + head.Size.Y * 0.5 + 0.12)
+		lowestY = math.min(lowestY, head.Position.Y - head.Size.Y * 0.5)
+	end
+	if torso and torso:IsA("BasePart") and isFiniteVector3(torso.Position) then
+		highestY = math.max(highestY, torso.Position.Y + torso.Size.Y * 0.5)
+		lowestY = math.min(lowestY, torso.Position.Y - torso.Size.Y * 0.5)
+	end
+
+	if highestY == -math.huge then
 		highestY = centerWorld.Y + math.max(1.8, hipHeight + 1.1)
+	end
+	if lowestY == math.huge then
 		lowestY = centerWorld.Y - math.max(1.8, hipHeight + 0.9)
 	else
-		if hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position) then
-			lowestY = math.min(lowestY, hrp.Position.Y - math.max(1.6, hipHeight + 0.65))
-		end
+		lowestY = math.min(lowestY, centerWorld.Y - math.max(1.6, hipHeight + 0.65))
 	end
 
 	local topWorld = Vector3.new(centerWorld.X, highestY, centerWorld.Z)
@@ -1265,8 +1282,10 @@ local function updateESPVisuals(cam, originPos)
 	if ESPContainer.Parent ~= ScreenGui and ScreenGui then
 		ESPContainer.Parent = ScreenGui
 	end
-	ESPContainer.Visible = true
+	setVisibleIfChanged(ESPContainer, true)
+
 	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	local maxStudsLimit = math.max(maxEspDist, maxEspDist / 0.28)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
 		hideUnusedEspEntries(1)
@@ -1305,46 +1324,42 @@ local function updateESPVisuals(cam, originPos)
 		end
 	end
 
-	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
-	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
-
 	local visualIndex = 0
 	for _, item in ipairs(EspCandidatesBuf) do
 		local model = item.model
 		local hum = item.hum
-		local hrp = model:FindFirstChild("HumanoidRootPart")
-		local head = model:FindFirstChild("Head")
-		local anchor = (hrp and hrp:IsA("BasePart") and hrp)
-			or (head and head:IsA("BasePart") and head)
-			or model:FindFirstChildWhichIsA("BasePart")
+		local hrp, head, torso, anchor = getModelRigParts(model, hum)
 
 		if anchor and isFiniteVector3(anchor.Position) then
 			local distStuds = (anchor.Position - originPos).Magnitude
-			local distMeters = math.floor(distStuds * 0.28 + 0.5)
-
-			if distStuds <= math.max(maxEspDist, maxEspDist / 0.28) or distMeters <= maxEspDist then
-				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
+			if distStuds <= maxStudsLimit then
+				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, torso, anchor, cam, vp)
 				if boxLeft then
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
 					if entry then
-						local isBlocked = false
-						if Config.ESPWallCheck then
-							isBlocked = getCachedEspWallBlocked(model, anchor, hum)
+						local boxColor = COLOR_ESP_CLEAR_GREEN
+						if Config.ESPWallCheck and getCachedEspWallBlocked(model, anchor, hum) then
+							boxColor = COLOR_ESP_WALL_WHITE
 						end
-						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
 
 						if entry.box then
 							if Config.ESPBox then
-								entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
-								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
-								if entry.stroke then
-									entry.stroke.Color = boxColor
-									entry.stroke.Thickness = 1.4
+								if entry.lastBoxX ~= boxLeft or entry.lastBoxY ~= boxTop or entry.lastBoxW ~= boxW or entry.lastBoxH ~= boxH then
+									entry.lastBoxX = boxLeft
+									entry.lastBoxY = boxTop
+									entry.lastBoxW = boxW
+									entry.lastBoxH = boxH
+									entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
+									entry.box.Size = UDim2.new(0, boxW, 0, boxH)
 								end
-								entry.box.Visible = true
+								if entry.stroke and entry.lastBoxColor ~= boxColor then
+									entry.lastBoxColor = boxColor
+									entry.stroke.Color = boxColor
+								end
+								setVisibleIfChanged(entry.box, true)
 							else
-								entry.box.Visible = false
+								setVisibleIfChanged(entry.box, false)
 							end
 						end
 
@@ -1354,41 +1369,61 @@ local function updateESPVisuals(cam, originPos)
 								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
 								local barW = 5
 								local barLeft = boxLeft - barW - 3
-								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
-								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
-								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
-								entry.hpFill.Position = UDim2.new(0, 0, 1 - hpRatio, 0)
-								entry.hpFill.BackgroundColor3 = getHealthColor(hpRatio)
-								entry.hpBg.Visible = true
+								if entry.lastBoxX ~= boxLeft or entry.lastBoxY ~= boxTop or entry.lastBoxH ~= boxH then
+									entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
+									entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
+								end
+								if entry.lastHpRatio ~= hpRatio then
+									entry.lastHpRatio = hpRatio
+									entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
+									entry.hpFill.Position = UDim2.new(0, 0, 1 - hpRatio, 0)
+									local hpCol = getHealthColor(hpRatio)
+									if entry.lastHpColor ~= hpCol then
+										entry.lastHpColor = hpCol
+										entry.hpFill.BackgroundColor3 = hpCol
+									end
+								end
+								setVisibleIfChanged(entry.hpBg, true)
 							else
-								entry.hpBg.Visible = false
+								setVisibleIfChanged(entry.hpBg, false)
 							end
 						end
 
 						if entry.dist then
 							if Config.ESPDistance then
-								entry.dist.Text = tostring(distMeters) .. "m"
+								local distMeters = math.floor(distStuds * 0.28 + 0.5)
+								local distStr = tostring(distMeters) .. "m"
+								if entry.lastDistText ~= distStr then
+									entry.lastDistText = distStr
+									entry.dist.Text = distStr
+								end
 								entry.dist.Position = UDim2.new(0, boxLeft, 0, boxTop + boxH + 2)
 								entry.dist.Size = UDim2.new(0, math.max(boxW, 28), 0, 14)
-								entry.dist.Visible = true
+								setVisibleIfChanged(entry.dist, true)
 							else
-								entry.dist.Visible = false
+								setVisibleIfChanged(entry.dist, false)
 							end
 						end
 
 						if entry.pose then
 							if Config.ESPBox or Config.ESPDistance or Config.ESPHealthBar then
-								local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head)
+								local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head, torso)
 								local labelW = math.max(boxW, 56)
 								local labelLeft = math.floor(boxLeft + boxW * 0.5 - labelW * 0.5)
 								local labelTop = boxTop - 16
-								entry.pose.Text = stanceText
-								entry.pose.TextColor3 = stanceColor
+								if entry.lastPoseText ~= stanceText then
+									entry.lastPoseText = stanceText
+									entry.pose.Text = stanceText
+								end
+								if entry.lastPoseColor ~= stanceColor then
+									entry.lastPoseColor = stanceColor
+									entry.pose.TextColor3 = stanceColor
+								end
 								entry.pose.Position = UDim2.new(0, labelLeft, 0, labelTop)
 								entry.pose.Size = UDim2.new(0, labelW, 0, 14)
-								entry.pose.Visible = true
+								setVisibleIfChanged(entry.pose, true)
 							else
-								entry.pose.Visible = false
+								setVisibleIfChanged(entry.pose, false)
 							end
 						end
 					end
@@ -1548,7 +1583,7 @@ pcall(function()
 	HButton.InputBegan:Connect(beginDrag)
 
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseMovement) then
 			local delta = input.Position - dragStart
 			if delta.Magnitude > 5 then movedWhileDrag = true end
 			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -2090,17 +2125,11 @@ local function triggerAsyncNpcScan()
 		local newEntries = {}
 		local seen = {}
 		local myChar = LocalPlayer.Character
+		local scannedCount = 0
 		pcall(function()
 			for _, obj in ipairs(Workspace:GetChildren()) do
-				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] and not seen[obj] then
-					local hum = obj:FindFirstChildOfClass("Humanoid")
-					if hum and hum.Health > 0 then
-						seen[obj] = true
-						table.insert(newEntries, { model = obj, hum = hum })
-					end
-				end
-			end
-			for _, obj in ipairs(Workspace:GetDescendants()) do
+				if scannedCount >= 180 then break end
+				scannedCount = scannedCount + 1
 				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] and not seen[obj] then
 					local hum = obj:FindFirstChildOfClass("Humanoid")
 					if hum and hum.Health > 0 then
@@ -2337,7 +2366,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	end
 
 	if checkNpcs then
-		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 1.2 or 2.0) then
+		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 1.5 or 2.5) then
 			lastNpcScanTime = elapsedClock
 			triggerAsyncNpcScan()
 		end
@@ -2361,7 +2390,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 end
 
 local function updateRainbowUI()
-	if elapsedClock - lastRainbowUpdateTime < 0.04 then return end
+	if elapsedClock - lastRainbowUpdateTime < 0.06 then return end
 	lastRainbowUpdateTime = elapsedClock
 	if isMinimized then
 		if HButtonStroke then HButtonStroke.Color = COLOR_H_BLACK_BORDER end
@@ -2379,17 +2408,17 @@ RunService.RenderStepped:Connect(function(dt)
 	updateRainbowUI()
 
 	pcall(function()
-		if elapsedClock - lastPlayerSetRebuildTime >= 0.35 then
+		if elapsedClock - lastPlayerSetRebuildTime >= 0.45 then
 			lastPlayerSetRebuildTime = elapsedClock
 			rebuildPlayerCharacterSet()
 		end
 
-		if shouldTargetNpcs() and (#CachedNpcEntries == 0 or elapsedClock - lastNpcScanTime >= 2.0) then
+		if shouldTargetNpcs() and (#CachedNpcEntries == 0 or elapsedClock - lastNpcScanTime >= 2.5) then
 			lastNpcScanTime = elapsedClock
 			triggerAsyncNpcScan()
 		end
 
-		if elapsedClock - lastWeaponRangeSyncTime >= 0.5 then
+		if elapsedClock - lastWeaponRangeSyncTime >= 0.6 then
 			lastWeaponRangeSyncTime = elapsedClock
 			syncWeaponRangeAuto()
 		end
@@ -2400,7 +2429,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if Config.FakeLag then
-			if elapsedClock - lastFakeLagSyncTime >= 0.05 then
+			if elapsedClock - lastFakeLagSyncTime >= 0.06 then
 				lastFakeLagSyncTime = elapsedClock
 				syncFakeLagEnemies(true)
 			end
@@ -2408,7 +2437,7 @@ RunService.RenderStepped:Connect(function(dt)
 			syncFakeLagEnemies(false)
 		end
 
-		if elapsedClock - lastSeatCheckTime >= 0.12 then
+		if elapsedClock - lastSeatCheckTime >= 0.15 then
 			lastSeatCheckTime = elapsedClock
 			syncVehicleAutoState()
 		end
@@ -2416,7 +2445,7 @@ RunService.RenderStepped:Connect(function(dt)
 		local cam = Workspace.CurrentCamera
 		local originPos = getOriginPosition(cam)
 
-		if elapsedClock - lastEspRenderTime >= 0.02 then
+		if elapsedClock - lastEspRenderTime >= 0.025 then
 			lastEspRenderTime = elapsedClock
 			updateESPVisuals(cam, originPos)
 		end
@@ -2432,7 +2461,7 @@ RunService.RenderStepped:Connect(function(dt)
 			CachedAimPos = CachedTarget.Position
 			CachedDistance = rawDist
 
-			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.08) then
+			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.1) then
 				lastWallCheckTime = elapsedClock
 				local hum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
 				CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, hum)
