@@ -238,8 +238,6 @@ local function syncFakeLagEnemies(enabled)
 	local hrp = getLocalRootPart()
 	if not hrp then return end
 
-	-- Nhịp Server Fake Lag: chốt mốc vị trí gửi lên server theo chu kỳ ngắn (~0.18s giữ mốc, ~0.05s nhả/đẩy nhịp)
-	-- giúp phía server nhận vị trí giật/khựng theo nhịp thay vì khóa cứng cục bộ vô dụng.
 	local cycle = elapsedClock - FakeLagLastBurstTime
 	if not FakeLagAnchorCFrame or cycle >= 0.23 then
 		FakeLagLastBurstTime = elapsedClock
@@ -504,11 +502,11 @@ local function applyConfigTable(tbl)
 			Config[k] = tbl[k]
 		end
 	end
+	-- Luôn tắt FakeLag khi nạp cấu hình để tránh bị kẹt nhịp giữ vị trí lúc mới vào/chạy script
+	Config.FakeLag = false
 	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
 	userDesiredEnabled = Config.Enabled
-	if not Config.FakeLag then
-		releaseFakeLagState()
-	end
+	releaseFakeLagState()
 end
 
 local function saveConfigByName(rawName)
@@ -518,6 +516,7 @@ local function saveConfigByName(rawName)
 	for k, _ in pairs(getDefaultConfig()) do
 		snapshot[k] = Config[k]
 	end
+	snapshot.FakeLag = false
 	MemorySaves[cleanName] = snapshot
 
 	local payload = "return " .. serializeValue(snapshot)
@@ -1524,7 +1523,7 @@ pcall(function()
 	HButton.InputBegan:Connect(beginDrag)
 
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseMovement) then
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
 			local delta = input.Position - dragStart
 			if delta.Magnitude > 5 then movedWhileDrag = true end
 			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -2006,11 +2005,13 @@ pcall(function()
 		end
 	end
 
+	Config.FakeLag = false
+	releaseFakeLagState()
 	switchTab(Config.ActiveTab)
 	syncWeaponRangeAuto()
 	syncAllUiTexts()
 	applyFarRenderState(Config.FarRender)
-	syncFakeLagEnemies(Config.FakeLag)
+	syncFakeLagEnemies(false)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
