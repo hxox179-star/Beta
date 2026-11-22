@@ -868,29 +868,26 @@ local function getEnemyStanceLabel(model, hum, hrp, head)
 		return "NGỒI", Color3.fromRGB(255, 215, 70)
 	end
 
-	if okState and (
-		state == Enum.HumanoidStateType.FallingDown
-		or state == Enum.HumanoidStateType.Physics
-		or state == Enum.HumanoidStateType.Ragdoll
-	) then
-		return "NẰM", Color3.fromRGB(255, 110, 110)
+	local isProne = false
+	if okState and (state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.FallingDown) then
+		isProne = true
 	end
 
 	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
 	if anchorPart and isFiniteVector3(anchorPart.Position) then
 		local upVec = anchorPart.CFrame.UpVector
-		if isFiniteVector3(upVec) and math.abs(upVec.Y) < 0.45 then
-			return "NẰM", Color3.fromRGB(255, 110, 110)
-		end
-
+		local flatBody = isFiniteVector3(upVec) and (math.abs(upVec.Y) < 0.25)
+		local headOffsetSmall = false
 		if head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
-			local dy = head.Position.Y - hrp.Position.Y
-			if dy < 0.75 then
-				return "NẰM", Color3.fromRGB(255, 110, 110)
-			elseif dy < 1.25 then
-				return "NGỒI", Color3.fromRGB(255, 215, 70)
-			end
+			headOffsetSmall = (head.Position.Y - hrp.Position.Y) < 0.55
 		end
+		if flatBody and headOffsetSmall then
+			isProne = true
+		end
+	end
+
+	if isProne then
+		return "NẰM", Color3.fromRGB(255, 110, 110)
 	end
 
 	return "ĐỨNG", Color3.fromRGB(245, 248, 255)
@@ -970,9 +967,9 @@ end
 local function getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
 	local anchorPos = anchor.Position
 	if Config.ESPCompactLock then
-		-- Khóa cứng kích thước gọn theo dáng nhân vật để không bị phình hoặc biến dạng
+		-- Khóa cứng kích thước gọn cân đối theo dáng nhân vật để không bị biến dạng
 		local lockedCenter = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchorPos
-		return lockedCenter, 3.85, 1.85
+		return lockedCenter, 4.35, 2.25
 	end
 
 	local charHeight = 5.0
@@ -1082,9 +1079,9 @@ local function updateESPVisuals(cam, originPos)
 
 					local boxHeight, boxWidth
 					if Config.ESPCompactLock then
-						boxHeight = math.clamp(rawBoxH * 0.86, 12, vp.Y * 0.55)
-						local lockedAspectW = boxHeight * 0.52
-						boxWidth = math.clamp(math.min(rawBoxW, lockedAspectW * 1.15), 8, lockedAspectW)
+						boxHeight = math.clamp(rawBoxH * 0.92, 14, vp.Y * 0.62)
+						local lockedAspectW = boxHeight * 0.58
+						boxWidth = math.clamp(math.min(rawBoxW, lockedAspectW * 1.15), 10, lockedAspectW)
 					else
 						boxHeight = math.clamp(rawBoxH, 10, vp.Y * 0.75)
 						boxWidth = math.clamp(rawBoxW, math.max(7, boxHeight * 0.38), vp.X * 0.45)
@@ -1111,7 +1108,7 @@ local function updateESPVisuals(cam, originPos)
 								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
 								if entry.stroke then
 									entry.stroke.Color = boxColor
-									entry.stroke.Thickness = Config.ESPCompactLock and 1.4 or 1.6
+									entry.stroke.Thickness = Config.ESPCompactLock and 1.5 or 1.6
 								end
 								entry.box.Visible = true
 							else
