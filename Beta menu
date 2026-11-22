@@ -123,6 +123,10 @@ local FakeLagFrozenParts = {}
 local FakeLagPendingShots = {}
 local FakeLagWasActive = false
 
+local EspCandidatesBuf = {}
+local EspSeenModelsBuf = {}
+local EspWallCache = {}
+
 local OriginalRenderState = {
 	Captured = false,
 	StreamingEnabled = nil,
@@ -1043,20 +1047,22 @@ local function getEnemyStanceLabel(model, hum, hrp, head)
 	end
 
 	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
-	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp)
-		or (torso and torso:IsA("BasePart") and torso)
+	local anchorPart = (torso and torso:IsA("BasePart") and torso)
+		or (hrp and hrp:IsA("BasePart") and hrp)
 		or (head and head:IsA("BasePart") and head)
 		or nil
 
 	local isProne = false
 	if anchorPart and isFiniteVector3(anchorPart.Position) then
 		local upVec = anchorPart.CFrame.UpVector
-		if isFiniteVector3(upVec) and math.abs(upVec.Y) < 0.22 then
+		if isFiniteVector3(upVec) and math.abs(upVec.Y) < 0.25 then
 			isProne = true
 		end
 	end
-	if not isProne and head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
-		if (head.Position.Y - hrp.Position.Y) < 0.65 then
+	if not isProne and torso and torso:IsA("BasePart") and head and head:IsA("BasePart") then
+		local dy = head.Position.Y - torso.Position.Y
+		local minBodySpan = (torso.Size.Y * 0.5) + (head.Size.Y * 0.5)
+		if dy < minBodySpan * 0.45 then
 			isProne = true
 		end
 	end
@@ -1065,18 +1071,26 @@ local function getEnemyStanceLabel(model, hum, hrp, head)
 		return "NẰM", Color3.fromRGB(255, 110, 110)
 	end
 
+	local okState, humState = pcall(function() return hum:GetState() end)
+	local isSeatedState = okState and (humState == Enum.HumanoidStateType.Seated)
 	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
-	local hipHeight = tonumber(hum.HipHeight) or 2
-	local isCrouchedByHeight = false
-	if head and head:IsA("BasePart") and hrp and hrp:IsA("BasePart") then
-		local verticalHeadDelta = head.Position.Y - hrp.Position.Y
-		local expectedStandingDelta = math.max(1.25, hipHeight * 0.72 + head.Size.Y * 0.5)
-		if verticalHeadDelta < expectedStandingDelta * 0.68 then
-			isCrouchedByHeight = true
+
+	local isCrouched = false
+	if torso and torso:IsA("BasePart") and head and head:IsA("BasePart") then
+		local headToTorsoY = head.Position.Y - torso.Position.Y
+		local expectedHeadToTorsoY = (torso.Size.Y * 0.5) + (head.Size.Y * 0.5)
+		if expectedHeadToTorsoY > 0.2 and headToTorsoY < expectedHeadToTorsoY * 0.72 then
+			isCrouched = true
+		end
+	end
+	if not isCrouched and hrp and hrp:IsA("BasePart") and torso and torso:IsA("BasePart") then
+		local torsoToHrpY = torso.Position.Y - hrp.Position.Y
+		if math.abs(torsoToHrpY) > 1.35 and head and head:IsA("BasePart") and (head.Position.Y - hrp.Position.Y) < 1.15 then
+			isCrouched = true
 		end
 	end
 
-	if hasSeatPart or hum.Sit or isCrouchedByHeight then
+	if hasSeatPart or hum.Sit or isSeatedState or isCrouched then
 		return "NGỒI", Color3.fromRGB(255, 215, 70)
 	end
 
@@ -1127,6 +1141,16 @@ local function checkWallOcclusion(model, targetPart, aimPos, hum)
 	if not ok or not result or not result.Instance then return false, false end
 	if isGhostOrNonSolidPart(result.Instance) then return false, false end
 	return true, false
+end
+
+local function getCachedEspWallBlocked(model, anchor, hum)
+	local cached = EspWallCache[model]
+	if cached and (elapsedClock - cached.t) < 0.14 then
+		return cached.blocked
+	end
+	local blocked = checkWallOcclusion(model, anchor, anchor.Position, hum)
+	EspWallCache[model] = { blocked = blocked, t = elapsedClock }
+	return blocked
 end
 
 local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
@@ -1249,38 +1273,34 @@ local function updateESPVisuals(cam, originPos)
 		return
 	end
 
-	local candidates = {}
-	local seenModels = {}
+	table.clear(EspCandidatesBuf)
+	table.clear(EspSeenModelsBuf)
 
 	if shouldTargetPlayers() then
 		for _, player in ipairs(Players:GetPlayers()) do
 			if isEnemyPlayer(player) then
 				local char = player.Character
 				local hum = char and char:FindFirstChildOfClass("Humanoid")
-				if char and hum and hum.Health > 0 and not seenModels[char] then
-					seenModels[char] = true
-					table.insert(candidates, { model = char, hum = hum })
+				if char and hum and hum.Health > 0 and not EspSeenModelsBuf[char] then
+					EspSeenModelsBuf[char] = true
+					table.insert(EspCandidatesBuf, { model = char, hum = hum })
 				end
 			end
 		end
 	end
 
 	if shouldTargetNpcs() then
-		for _, entry in ipairs(CachedNpcEntries) do
+		for i = #CachedNpcEntries, 1, -1 do
+			local entry = CachedNpcEntries[i]
 			local npcModel = entry.model
 			local hum = entry.hum
-			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 and not seenModels[npcModel] then
-				seenModels[npcModel] = true
-				table.insert(candidates, { model = npcModel, hum = hum })
-			end
-		end
-		for _, obj in ipairs(Workspace:GetDescendants()) do
-			if obj:IsA("Model") and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character and not seenModels[obj] then
-				local hum = obj:FindFirstChildOfClass("Humanoid")
-				if hum and hum.Health > 0 then
-					seenModels[obj] = true
-					table.insert(candidates, { model = obj, hum = hum })
+			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
+				if not EspSeenModelsBuf[npcModel] then
+					EspSeenModelsBuf[npcModel] = true
+					table.insert(EspCandidatesBuf, entry)
 				end
+			else
+				table.remove(CachedNpcEntries, i)
 			end
 		end
 	end
@@ -1289,7 +1309,7 @@ local function updateESPVisuals(cam, originPos)
 	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
 
 	local visualIndex = 0
-	for _, item in ipairs(candidates) do
+	for _, item in ipairs(EspCandidatesBuf) do
 		local model = item.model
 		local hum = item.hum
 		local hrp = model:FindFirstChild("HumanoidRootPart")
@@ -1310,8 +1330,7 @@ local function updateESPVisuals(cam, originPos)
 					if entry then
 						local isBlocked = false
 						if Config.ESPWallCheck then
-							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
-							isBlocked = blockedFlag
+							isBlocked = getCachedEspWallBlocked(model, anchor, hum)
 						end
 						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
 
@@ -2318,7 +2337,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	end
 
 	if checkNpcs then
-		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 0.6 or 1.2) then
+		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 1.2 or 2.0) then
 			lastNpcScanTime = elapsedClock
 			triggerAsyncNpcScan()
 		end
@@ -2342,7 +2361,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 end
 
 local function updateRainbowUI()
-	if elapsedClock - lastRainbowUpdateTime < 0.03 then return end
+	if elapsedClock - lastRainbowUpdateTime < 0.04 then return end
 	lastRainbowUpdateTime = elapsedClock
 	if isMinimized then
 		if HButtonStroke then HButtonStroke.Color = COLOR_H_BLACK_BORDER end
@@ -2360,17 +2379,17 @@ RunService.RenderStepped:Connect(function(dt)
 	updateRainbowUI()
 
 	pcall(function()
-		if elapsedClock - lastPlayerSetRebuildTime >= 0.25 then
+		if elapsedClock - lastPlayerSetRebuildTime >= 0.35 then
 			lastPlayerSetRebuildTime = elapsedClock
 			rebuildPlayerCharacterSet()
 		end
 
-		if shouldTargetNpcs() and (#CachedNpcEntries == 0 or elapsedClock - lastNpcScanTime >= 1.2) then
+		if shouldTargetNpcs() and (#CachedNpcEntries == 0 or elapsedClock - lastNpcScanTime >= 2.0) then
 			lastNpcScanTime = elapsedClock
 			triggerAsyncNpcScan()
 		end
 
-		if elapsedClock - lastWeaponRangeSyncTime >= 0.4 then
+		if elapsedClock - lastWeaponRangeSyncTime >= 0.5 then
 			lastWeaponRangeSyncTime = elapsedClock
 			syncWeaponRangeAuto()
 		end
@@ -2381,7 +2400,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if Config.FakeLag then
-			if elapsedClock - lastFakeLagSyncTime >= 0.03 then
+			if elapsedClock - lastFakeLagSyncTime >= 0.05 then
 				lastFakeLagSyncTime = elapsedClock
 				syncFakeLagEnemies(true)
 			end
@@ -2389,7 +2408,7 @@ RunService.RenderStepped:Connect(function(dt)
 			syncFakeLagEnemies(false)
 		end
 
-		if elapsedClock - lastSeatCheckTime >= 0.1 then
+		if elapsedClock - lastSeatCheckTime >= 0.12 then
 			lastSeatCheckTime = elapsedClock
 			syncVehicleAutoState()
 		end
@@ -2397,7 +2416,7 @@ RunService.RenderStepped:Connect(function(dt)
 		local cam = Workspace.CurrentCamera
 		local originPos = getOriginPosition(cam)
 
-		if elapsedClock - lastEspRenderTime >= 0.016 then
+		if elapsedClock - lastEspRenderTime >= 0.02 then
 			lastEspRenderTime = elapsedClock
 			updateESPVisuals(cam, originPos)
 		end
@@ -2413,7 +2432,7 @@ RunService.RenderStepped:Connect(function(dt)
 			CachedAimPos = CachedTarget.Position
 			CachedDistance = rawDist
 
-			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
+			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.08) then
 				lastWallCheckTime = elapsedClock
 				local hum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
 				CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, hum)
