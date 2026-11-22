@@ -46,12 +46,8 @@ local function getDefaultConfig()
 		ShowTriggerFOV = true,
 		TargetPart = "Head",
 		HeadshotChance = 50,
-		MaxDistance = 0,
-		AutoSmartAim = false,
-		NoRecoil = false,
-		StraightBullet = false,
-		BulletSpeed = 950,
-		MaxLeadTime = 0.24,
+		AutoWeaponRange = true,
+		WeaponRange = 0,
 		SevenFingerGesture = true,
 		FarRender = false,
 		TriggerBot = false,
@@ -73,7 +69,7 @@ local Config = getDefaultConfig()
 local ScreenGui, FOVFrame, TriggerFOVFrame, ESPContainer, FOVLabel, TriggerFOVLabel, ESPDistLabel, MainFrame, TopBar, TabBar, HButton, HButtonStroke, SaveNameBox, SaveStatusLabel
 local PageFrames = {}
 local TabButtons = {}
-local ToggleSilentBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, MaxDistBtn, AutoSmartBtn, NoRecoilBtn, StraightBulletBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
+local ToggleSilentBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
 local mainStroke
 local EspVisualPool = {}
 
@@ -101,7 +97,6 @@ local activeTouchCount = 0
 
 local CachedTarget = nil
 local CachedAimPos = nil
-local CachedTargetVelocity = Vector3.zero
 local CachedDistance = 0
 local CachedIsWallBlocked = false
 local CachedBypassWall = false
@@ -115,16 +110,13 @@ local lastFarRenderSyncTime = 0
 local lastTriggerFireTime = 0
 local lastEspRenderTime = 0
 local lastPlayerSetRebuildTime = 0
+local lastWeaponRangeSyncTime = 0
 local isTriggerBurstBusy = false
 local elapsedClock = 0
 local isScanningNpc = false
 
 local CachedNpcEntries = {}
 local PlayerCharacterSet = {}
-local prevTargetPart = nil
-local prevTargetPos = nil
-local prevTargetVel = nil
-local prevSampleTime = nil
 
 local OriginalRenderState = {
 	Captured = false,
@@ -166,6 +158,73 @@ end
 
 local function isCurrentlyFiring()
 	return isFiringInputHeld == true
+end
+
+local function detectServerWeaponRange()
+	local detectedRange = 0
+	local char = LocalPlayer and LocalPlayer.Character
+	local tool = char and char:FindFirstChildOfClass("Tool")
+
+	local rangeKeys = {
+		"range", "maxrange", "maxdistance", "firedistance",
+		"bulletdistance", "effectiveRange", "effectiverange", "gunrange", "reach"
+	}
+
+	local function checkValueName(name, val)
+		if typeof(val) ~= "number" or not isFiniteNumber(val) or val <= 5 or val > 200000 then
+			return nil
+		end
+		local lower = string.lower(tostring(name or ""))
+		for _, key in ipairs(rangeKeys) do
+			if string.find(lower, string.lower(key), 1, true) then
+				return val
+			end
+		end
+		return nil
+	end
+
+	if tool then
+		for attrName, attrVal in pairs(tool:GetAttributes()) do
+			local r = checkValueName(attrName, attrVal)
+			if r and (detectedRange == 0 or r < detectedRange) then
+				detectedRange = r
+			end
+		end
+		for _, desc in ipairs(tool:GetDescendants()) do
+			if desc:IsA("NumberValue") or desc:IsA("IntValue") then
+				local r = checkValueName(desc.Name, desc.Value)
+				if r and (detectedRange == 0 or r < detectedRange) then
+					detectedRange = r
+				end
+			end
+			for attrName, attrVal in pairs(desc:GetAttributes()) do
+				local r = checkValueName(attrName, attrVal)
+				if r and (detectedRange == 0 or r < detectedRange) then
+					detectedRange = r
+				end
+			end
+		end
+	end
+
+	if detectedRange == 0 and LocalPlayer then
+		for attrName, attrVal in pairs(LocalPlayer:GetAttributes()) do
+			local r = checkValueName(attrName, attrVal)
+			if r and (detectedRange == 0 or r < detectedRange) then
+				detectedRange = r
+			end
+		end
+	end
+
+	if detectedRange == 0 and Workspace then
+		for attrName, attrVal in pairs(Workspace:GetAttributes()) do
+			local r = checkValueName(attrName, attrVal)
+			if r and (detectedRange == 0 or r < detectedRange) then
+				detectedRange = r
+			end
+		end
+	end
+
+	return detectedRange
 end
 
 local function captureOriginalRenderState()
@@ -470,13 +529,15 @@ local function getSafeAngleText() return Config.SafeAngleClamp and ("Lách góc 
 local function getAimModeText() return "Aim Mode: " .. tostring(Config.AimMode) end
 local function getTargetPartText() return "Mục tiêu: " .. tostring(Config.TargetPart) end
 local function getHeadshotChanceText() return "Tỷ lệ HS (Random): " .. tostring(Config.HeadshotChance) .. "%" end
-local function getMaxDistText()
-	if Config.MaxDistance <= 0 then return "Tầm bắn: Không giới hạn" end
-	return "Tầm bắn: " .. tostring(Config.MaxDistance)
+local function getAutoRangeText()
+	if not Config.AutoWeaponRange then
+		return "Tầm bắn tự động: TẮT (Map)"
+	end
+	if Config.WeaponRange and Config.WeaponRange > 0 then
+		return "Tầm bắn tự động: " .. tostring(math.floor(Config.WeaponRange)) .. " studs"
+	end
+	return "Tầm bắn tự động: Theo đạn Server"
 end
-local function getAutoSmartText() return Config.AutoSmartAim and "Siêu đoán hướng: BẬT" or "Siêu đoán hướng: TẮT" end
-local function getNoRecoilText() return Config.NoRecoil and "Không rung tâm: BẬT" or "Không rung tâm: TẮT" end
-local function getStraightBulletText() return Config.StraightBullet and "Đạn thẳng: BẬT" or "Đạn thẳng: TẮT" end
 local function getSevenFingerText() return Config.SevenFingerGesture and "7 ngón ẩn/mở: BẬT" or "7 ngón ẩn/mở: TẮT" end
 local function getFarRenderText() return Config.FarRender and "Nhìn map xa: BẬT" or "Nhìn map xa: TẮT" end
 local function getTriggerBotText() return Config.TriggerBot and "Tự bắn khi chỉ địch: BẬT" or "Tự bắn khi chỉ địch: TẮT" end
@@ -490,6 +551,19 @@ local function getESPDistRangeText() return "Khoảng cách ESP: " .. tostring(C
 local function getAutoLoadText() return Config.AutoLoadEnabled and "Auto Load Save: BẬT" or "Auto Load Save: TẮT" end
 local function shouldTargetPlayers() return Config.AimMode == "Player" or Config.AimMode == "Player + NPC" end
 local function shouldTargetNpcs() return Config.AimMode == "NPC" or Config.AimMode == "Player + NPC" end
+
+local function syncWeaponRangeAuto()
+	if not Config.AutoWeaponRange then
+		Config.WeaponRange = 0
+		if AutoRangeBtn then AutoRangeBtn.Text = getAutoRangeText() end
+		return
+	end
+	local detected = detectServerWeaponRange()
+	if detected ~= Config.WeaponRange then
+		Config.WeaponRange = detected
+		if AutoRangeBtn then AutoRangeBtn.Text = getAutoRangeText() end
+	end
+end
 
 local function updateFOVVisual()
 	local active = isSilentActive()
@@ -548,10 +622,10 @@ local function syncAllUiTexts()
 	if ToggleFOVBtn then ToggleFOVBtn.Text = Config.ShowFOV and "FOV Silent: HIỆN" or "FOV Silent: ẨN" end
 	if TargetPartBtn then TargetPartBtn.Text = getTargetPartText() end
 	if HeadshotChanceBtn then HeadshotChanceBtn.Text = getHeadshotChanceText() end
-	if MaxDistBtn then MaxDistBtn.Text = getMaxDistText() end
-	if AutoSmartBtn then AutoSmartBtn.Text = getAutoSmartText() end
-	if NoRecoilBtn then NoRecoilBtn.Text = getNoRecoilText() end
-	if StraightBulletBtn then StraightBulletBtn.Text = getStraightBulletText() end
+	if AutoRangeBtn then
+		AutoRangeBtn.Text = getAutoRangeText()
+		AutoRangeBtn.BackgroundColor3 = Config.AutoWeaponRange and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+	end
 	if TeamCheckBtn then TeamCheckBtn.Text = Config.TeamCheck and "Kiểm tra đồng đội: BẬT" or "Kiểm tra đồng đội: TẮT" end
 	if WallCheckBtn then WallCheckBtn.Text = Config.WallCheck and "WallCheck Silent: BẬT" or "WallCheck Silent: TẮT" end
 	if SevenFingerBtn then
@@ -969,33 +1043,60 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
-local function getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
-	local anchorPos = anchor.Position
-	local charHeight = 5.0
-	local charWidth = 2.6
-	local centerPos = anchorPos
-
-	local okBox, boxCf, boxSize = pcall(function()
+local function getCharacterScreenBounds(model, hrp, head, anchor, cam, vp)
+	local boxCf, boxSize = CFrame.new(anchor.Position), Vector3.new(2.4, 5.2, 1.4)
+	local okBox, cfRes, szRes = pcall(function()
 		return model:GetBoundingBox()
 	end)
-	if okBox and typeof(boxCf) == "CFrame" and typeof(boxSize) == "Vector3" and isFiniteVector3(boxSize) then
-		if boxSize.Y > 0.5 and boxSize.Y < 25 then
-			charHeight = math.min(boxSize.Y, 5.4)
-		end
-		local horizMax = math.max(boxSize.X, boxSize.Z)
-		if horizMax > 0.4 and horizMax < 15 then
-			charWidth = math.min(horizMax, 2.8)
-		end
-		if isFiniteVector3(boxCf.Position) then
-			centerPos = boxCf.Position
+	if okBox and typeof(cfRes) == "CFrame" and typeof(szRes) == "Vector3" and isFiniteVector3(szRes) and isFiniteVector3(cfRes.Position) then
+		boxCf = cfRes
+		boxSize = Vector3.new(
+			math.clamp(szRes.X, 0.8, 8),
+			math.clamp(szRes.Y, 1.2, 10),
+			math.clamp(szRes.Z, 0.8, 8)
+		)
+	end
+
+	local hx = boxSize.X * 0.5
+	local hy = boxSize.Y * 0.5
+	local hz = boxSize.Z * 0.5
+
+	local minX, minY = math.huge, math.huge
+	local maxX, maxY = -math.huge, -math.huge
+	local anyValid = false
+
+	for sx = -1, 1, 2 do
+		for sy = -1, 1, 2 do
+			for sz = -1, 1, 2 do
+				local cornerWorld = boxCf:PointToWorldSpace(Vector3.new(sx * hx, sy * hy, sz * hz))
+				local sp, onScreen = cam:WorldToViewportPoint(cornerWorld)
+				if onScreen and isFiniteNumber(sp.X) and isFiniteNumber(sp.Y) and isFiniteNumber(sp.Z) and sp.Z > 0.05 then
+					anyValid = true
+					if sp.X < minX then minX = sp.X end
+					if sp.X > maxX then maxX = sp.X end
+					if sp.Y < minY then minY = sp.Y end
+					if sp.Y > maxY then maxY = sp.Y end
+				end
+			end
 		end
 	end
 
-	if hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position) then
-		centerPos = Vector3.new(hrp.Position.X, centerPos.Y, hrp.Position.Z)
+	if not anyValid or maxX <= minX or maxY <= minY then
+		return nil
 	end
 
-	return centerPos, charHeight, charWidth
+	minX = math.clamp(minX, 0, vp.X)
+	maxX = math.clamp(maxX, 0, vp.X)
+	minY = math.clamp(minY, 0, vp.Y)
+	maxY = math.clamp(maxY, 0, vp.Y)
+
+	local w = maxX - minX
+	local h = maxY - minY
+	if w < 4 or h < 6 then
+		return nil
+	end
+
+	return math.floor(minX), math.floor(minY), math.floor(w), math.floor(h)
 end
 
 local function updateESPVisuals(cam, originPos)
@@ -1052,9 +1153,6 @@ local function updateESPVisuals(cam, originPos)
 		end
 	end
 
-	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
-	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
-
 	local visualIndex = 0
 	for _, item in ipairs(candidates) do
 		local model = item.model
@@ -1068,22 +1166,8 @@ local function updateESPVisuals(cam, originPos)
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
 			if distStuds <= maxEspDist or distMeters <= maxEspDist then
-				local centerWorld, charHeight, charWidth = getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
-				local screenCenter, onScreen = cam:WorldToViewportPoint(centerWorld)
-				local rx, ry, rz = screenCenter.X, screenCenter.Y, screenCenter.Z
-
-				if onScreen and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.25 then
-					local rawBoxH = (charHeight * projScaleY) / rz
-					local rawBoxW = (charWidth * projScaleY) / rz
-
-					local boxHeight = math.clamp(rawBoxH, 10, vp.Y * 0.75)
-					local boxWidth = math.clamp(rawBoxW, math.max(7, boxHeight * 0.38), vp.X * 0.45)
-
-					local boxLeft = math.floor(rx - boxWidth * 0.5)
-					local boxTop = math.floor(ry - boxHeight * 0.5)
-					local boxW = math.floor(boxWidth)
-					local boxH = math.floor(boxHeight)
-
+				local boxLeft, boxTop, boxW, boxH = getCharacterScreenBounds(model, hrp, head, anchor, cam, vp)
+				if boxLeft then
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
 					if entry then
@@ -1129,7 +1213,7 @@ local function updateESPVisuals(cam, originPos)
 							if Config.ESPDistance then
 								entry.dist.Text = tostring(distMeters) .. "m"
 								entry.dist.Position = UDim2.new(0, boxLeft, 0, boxTop + boxH + 2)
-								entry.dist.Size = UDim2.new(0, boxW, 0, 14)
+								entry.dist.Size = UDim2.new(0, math.max(boxW, 28), 0, 14)
 								entry.dist.Visible = true
 							else
 								entry.dist.Visible = false
@@ -1140,7 +1224,7 @@ local function updateESPVisuals(cam, originPos)
 							if Config.ESPBox or Config.ESPDistance or Config.ESPHealthBar then
 								local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head)
 								local labelW = math.max(boxW, 56)
-								local labelLeft = math.floor(rx - labelW * 0.5)
+								local labelLeft = math.floor(boxLeft + boxW * 0.5 - labelW * 0.5)
 								local labelTop = boxTop - 16
 								entry.pose.Text = stanceText
 								entry.pose.TextColor3 = stanceColor
@@ -1502,20 +1586,17 @@ pcall(function()
 	AimModeBtn = createButton(silentPage, getAimModeText(), 2)
 	TargetPartBtn = createButton(silentPage, getTargetPartText(), 3)
 	HeadshotChanceBtn = createButton(silentPage, getHeadshotChanceText(), 4)
-	MaxDistBtn = createButton(silentPage, getMaxDistText(), 5)
-	AutoSmartBtn = createButton(silentPage, getAutoSmartText(), 6)
-	StraightBulletBtn = createButton(silentPage, getStraightBulletText(), 7)
-	NoRecoilBtn = createButton(silentPage, getNoRecoilText(), 8)
-	WallCheckBtn = createButton(silentPage, "WallCheck Silent: TẮT", 9)
-	TeamCheckBtn = createButton(silentPage, "Kiểm tra đồng đội: TẮT", 10)
-	ToggleFOVBtn = createButton(silentPage, "FOV Silent: ẨN", 11)
+	AutoRangeBtn = createButton(silentPage, getAutoRangeText(), 5)
+	WallCheckBtn = createButton(silentPage, "WallCheck Silent: TẮT", 6)
+	TeamCheckBtn = createButton(silentPage, "Kiểm tra đồng đội: TẮT", 7)
+	ToggleFOVBtn = createButton(silentPage, "FOV Silent: ẨN", 8)
 	local FOVMinus, FOVPlus
-	FOVLabel, FOVMinus, FOVPlus = createStepper(silentPage, "FOV Silent: " .. tostring(Config.FOVRadius), "-15", "+15", Color3.fromRGB(160, 240, 220), 12)
-	TriggerBotBtn = createButton(silentPage, getTriggerBotText(), 13)
-	TriggerWallBtn = createButton(silentPage, getTriggerWallText(), 14)
-	ToggleTriggerFOVBtn = createButton(silentPage, getToggleTriggerFOVText(), 15)
+	FOVLabel, FOVMinus, FOVPlus = createStepper(silentPage, "FOV Silent: " .. tostring(Config.FOVRadius), "-15", "+15", Color3.fromRGB(160, 240, 220), 9)
+	TriggerBotBtn = createButton(silentPage, getTriggerBotText(), 10)
+	TriggerWallBtn = createButton(silentPage, getTriggerWallText(), 11)
+	ToggleTriggerFOVBtn = createButton(silentPage, getToggleTriggerFOVText(), 12)
 	local TrigFOVMinus, TrigFOVPlus
-	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 16)
+	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 13)
 
 	-- TAB 2: ESP
 	local espPage = PageFrames["ESP"]
@@ -1688,24 +1769,11 @@ pcall(function()
 		Config.HeadshotChance = cyclePreset(HEADSHOT_CHANCE_PRESETS, Config.HeadshotChance, 50)
 		HeadshotChanceBtn.Text = getHeadshotChanceText()
 	end)
-	MaxDistBtn.MouseButton1Click:Connect(function()
-		if Config.MaxDistance == 0 then Config.MaxDistance = 150
-		elseif Config.MaxDistance == 150 then Config.MaxDistance = 250
-		elseif Config.MaxDistance == 250 then Config.MaxDistance = 400
-		else Config.MaxDistance = 0 end
-		MaxDistBtn.Text = getMaxDistText()
-	end)
-	AutoSmartBtn.MouseButton1Click:Connect(function()
-		Config.AutoSmartAim = not Config.AutoSmartAim
-		AutoSmartBtn.Text = getAutoSmartText()
-	end)
-	NoRecoilBtn.MouseButton1Click:Connect(function()
-		Config.NoRecoil = not Config.NoRecoil
-		NoRecoilBtn.Text = getNoRecoilText()
-	end)
-	StraightBulletBtn.MouseButton1Click:Connect(function()
-		Config.StraightBullet = not Config.StraightBullet
-		StraightBulletBtn.Text = getStraightBulletText()
+	AutoRangeBtn.MouseButton1Click:Connect(function()
+		Config.AutoWeaponRange = not Config.AutoWeaponRange
+		syncWeaponRangeAuto()
+		AutoRangeBtn.Text = getAutoRangeText()
+		AutoRangeBtn.BackgroundColor3 = Config.AutoWeaponRange and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end)
 	TeamCheckBtn.MouseButton1Click:Connect(function()
 		Config.TeamCheck = not Config.TeamCheck
@@ -1799,6 +1867,7 @@ pcall(function()
 	end
 
 	switchTab(Config.ActiveTab)
+	syncWeaponRangeAuto()
 	syncAllUiTexts()
 	applyFarRenderState(Config.FarRender)
 end)
@@ -1880,69 +1949,23 @@ local function triggerAsyncNpcScan()
 	end)
 end
 
-local function estimateTargetVelocity(part, dt, distance)
-	if not part or not part:IsA("BasePart") or not isFiniteVector3(part.Position) then
-		return Vector3.zero
-	end
-	local currentPos = part.Position
-	local assemblyVel = part.AssemblyLinearVelocity
-	if not isFiniteVector3(assemblyVel) then assemblyVel = Vector3.zero end
-	local estimatedVel = assemblyVel
-
-	if prevTargetPart == part and prevTargetPos and prevSampleTime and dt > 0.001 then
-		local frameVel = (currentPos - prevTargetPos) / dt
-		if isFiniteVector3(frameVel) and frameVel.Magnitude < 160 then
-			local blend = 0.65
-			estimatedVel = (assemblyVel.Magnitude > 1 and frameVel.Magnitude > 1) and assemblyVel:Lerp(frameVel, blend) or frameVel
+local function getEffectiveMaxRange()
+	if Config.FarRender then
+		if Config.AutoWeaponRange and Config.WeaponRange and Config.WeaponRange > 0 then
+			return math.max(Config.WeaponRange, 2500)
 		end
+		return 100000
 	end
-
-	prevTargetPart = part
-	prevTargetPos = currentPos
-	prevTargetVel = estimatedVel
-	prevSampleTime = elapsedClock
-	return isFiniteVector3(estimatedVel) and estimatedVel or Vector3.zero
-end
-
-local function computePredictedPosition(origin, part, velocity)
-	if not part or not isFiniteVector3(part.Position) then return nil end
-	local basePos = part.Position
-	if Config.StraightBullet or not Config.AutoSmartAim or not isFiniteVector3(origin) then
-		return basePos
+	if Config.AutoWeaponRange and Config.WeaponRange and Config.WeaponRange > 0 then
+		return Config.WeaponRange
 	end
-	local dist = (basePos - origin).Magnitude
-	local moveSpeed = isFiniteVector3(velocity) and velocity.Magnitude or 0
-	if moveSpeed < 2.5 then return basePos end
-
-	local nearScale = math.clamp((dist - 18) / 45, 0, 1)
-	if nearScale <= 0.05 then return basePos end
-
-	local effectiveSpeed = math.max(350, tonumber(Config.BulletSpeed) or 950)
-	local rawLead = dist / effectiveSpeed
-	local maxLead = math.min(tonumber(Config.MaxLeadTime) or 0.24, 0.22)
-	local leadTime = math.clamp(rawLead * nearScale * 0.75, 0, maxLead)
-
-	local predicted = basePos + (velocity * leadTime)
-	if (predicted - basePos).Magnitude > 4.5 then
-		predicted = basePos + (predicted - basePos).Unit * 4.5
-	end
-	return isFiniteVector3(predicted) and predicted or basePos
+	return 100000
 end
 
 local function isWithinMaxDistance(origin, part)
 	if not part or not isFiniteVector3(part.Position) then return true end
 	local dist = (part.Position - origin).Magnitude
-	if Config.FarRender then
-		if Config.MaxDistance > 0 then
-			return dist <= math.max(Config.MaxDistance, 2500)
-		end
-		return dist <= 100000
-	end
-	if Config.MaxDistance <= 0 then
-		if Config.AutoSmartAim then return dist <= 10000 end
-		return true
-	end
-	return dist <= Config.MaxDistance
+	return dist <= getEffectiveMaxRange()
 end
 
 local function isModelInTriggerFOV(model, hum, cam, originPos, centerX, centerY, radius)
@@ -2195,6 +2218,11 @@ RunService.RenderStepped:Connect(function(dt)
 			rebuildPlayerCharacterSet()
 		end
 
+		if elapsedClock - lastWeaponRangeSyncTime >= 0.4 then
+			lastWeaponRangeSyncTime = elapsedClock
+			syncWeaponRangeAuto()
+		end
+
 		if Config.FarRender and (elapsedClock - lastFarRenderSyncTime >= 1.5) then
 			lastFarRenderSyncTime = elapsedClock
 			applyFarRenderState(true)
@@ -2221,8 +2249,7 @@ RunService.RenderStepped:Connect(function(dt)
 
 		if CachedTarget and CachedTarget.Parent and isFiniteVector3(CachedTarget.Position) then
 			local rawDist = (CachedTarget.Position - originPos).Magnitude
-			CachedTargetVelocity = estimateTargetVelocity(CachedTarget, safeDt, rawDist)
-			CachedAimPos = computePredictedPosition(originPos, CachedTarget, CachedTargetVelocity) or CachedTarget.Position
+			CachedAimPos = CachedTarget.Position
 			CachedDistance = rawDist
 
 			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
@@ -2236,14 +2263,9 @@ RunService.RenderStepped:Connect(function(dt)
 		else
 			CachedTarget = nil
 			CachedAimPos = nil
-			CachedTargetVelocity = Vector3.zero
 			CachedDistance = 0
 			CachedIsWallBlocked = false
 			CachedBypassWall = false
-			prevTargetPart = nil
-			prevTargetPos = nil
-			prevTargetVel = nil
-			prevSampleTime = nil
 		end
 
 		if Config.TriggerBot and not pausedByVehicle then
@@ -2257,7 +2279,7 @@ RunService.RenderStepped:Connect(function(dt)
 			local currentDesc = CachedTarget and (CachedTarget.Parent.Name .. "." .. CachedTarget.Name) or "NONE"
 			if currentDesc ~= lastLoggedTargetName then
 				lastLoggedTargetName = currentDesc
-				logDebug(string.format("Target: %s | Dist: %.1f | Vel: %.1f", currentDesc, CachedDistance, CachedTargetVelocity.Magnitude))
+				logDebug(string.format("Target: %s | Dist: %.1f", currentDesc, CachedDistance))
 			end
 		end
 	end)
