@@ -124,11 +124,6 @@ local FakeLagFrozenParts = {}
 local FakeLagPendingShots = {}
 local FakeLagWasActive = false
 
-local EspCandidatesBuf = {}
-local EspSeenModelsBuf = {}
-local EspWallCache = setmetatable({}, { __mode = "k" })
-local ModelRigCache = setmetatable({}, { __mode = "k" })
-
 local OriginalRenderState = {
 	Captured = false,
 	StreamingEnabled = nil,
@@ -153,29 +148,6 @@ local function isFiniteVector3(v)
 		and isFiniteNumber(v.X)
 		and isFiniteNumber(v.Y)
 		and isFiniteNumber(v.Z)
-end
-
-local function getModelRigParts(model)
-	if not model then return nil, nil, nil, nil end
-	local cached = ModelRigCache[model]
-	if cached and (elapsedClock - cached.t) < 0.35 then
-		return cached.hrp, cached.head, cached.torso, cached.anchor
-	end
-	local hrp = model:FindFirstChild("HumanoidRootPart")
-	local head = model:FindFirstChild("Head")
-	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
-	local anchor = (hrp and hrp:IsA("BasePart") and hrp)
-		or (torso and torso:IsA("BasePart") and torso)
-		or (head and head:IsA("BasePart") and head)
-		or nil
-	ModelRigCache[model] = {
-		hrp = hrp,
-		head = head,
-		torso = torso,
-		anchor = anchor,
-		t = elapsedClock
-	}
-	return hrp, head, torso, anchor
 end
 
 local function isCallerOwnScript()
@@ -685,7 +657,7 @@ local function getESPEnabledText() return Config.ESPEnabled and "ESP Tổng: B�
 local function getESPBoxText() return Config.ESPBox and "ESP Box 2D: BẬT" or "ESP Box 2D: TẮT" end
 local function getESPHealthText() return Config.ESPHealthBar and "Thanh máu dọc: BẬT" or "Thanh máu dọc: TẮT" end
 local function getESPDistText() return Config.ESPDistance and "ESP Khoảng cách: BẬT" or "ESP Khoảng cách: TẮT" end
-local function getESPStanceText() return Config.ESPStance and "Đứng/Ngồi/Nằm/Nhảy: BẬT" or "Đứng/Ngồi/Nằm/Nhảy: TẮT" end
+local function getESPStanceText() return Config.ESPStance and "Đứng / Ngồi / Nằm: BẬT" or "Đứng / Ngồi / Nằm: TẮT" end
 local function getESPWallText() return Config.ESPWallCheck and "WallCheck ESP: BẬT" or "WallCheck ESP: TẮT" end
 local function getESPDistRangeText() return "Khoảng cách ESP: " .. tostring(Config.ESPMaxDistance) .. "m" end
 local function getAutoLoadText() return Config.AutoLoadEnabled and "Auto Load Save: BẬT" or "Auto Load Save: TẮT" end
@@ -923,7 +895,7 @@ local function mountGui(gui)
 end
 
 local MENU_WIDTH = 340
-local MENU_OPEN_HEIGHT = 268
+local MENU_OPEN_HEIGHT = 248
 local MENU_MIN_HEIGHT = 32
 local H_SQUARE_SIZE = 42
 
@@ -979,12 +951,6 @@ local function applyMenuVisibilityAndMinimize()
 	end
 end
 
-local function setVisibleIfChanged(inst, vis)
-	if inst and inst.Visible ~= vis then
-		inst.Visible = vis
-	end
-end
-
 local function getOrCreateEspEntry(index)
 	if EspVisualPool[index] then
 		return EspVisualPool[index]
@@ -1002,7 +968,7 @@ local function getOrCreateEspEntry(index)
 
 	local boxStroke = Instance.new("UIStroke")
 	boxStroke.Color = COLOR_ESP_CLEAR_GREEN
-	boxStroke.Thickness = 1.4
+	boxStroke.Thickness = 1.6
 	boxStroke.Parent = boxFrame
 
 	local hpBg = Instance.new("Frame")
@@ -1039,19 +1005,47 @@ local function getOrCreateEspEntry(index)
 	distLabel.ZIndex = 5
 	distLabel.Parent = ESPContainer
 
-	local poseLabel = Instance.new("TextLabel")
-	poseLabel.Name = "EspPose_" .. tostring(index)
-	poseLabel.BackgroundTransparency = 1
-	poseLabel.TextColor3 = Color3.fromRGB(255, 245, 140)
-	poseLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
-	poseLabel.TextStrokeTransparency = 0.15
-	poseLabel.Font = Enum.Font.GothamBold
-	poseLabel.TextSize = 10
-	poseLabel.Text = ""
-	poseLabel.Visible = false
-	poseLabel.Active = false
-	poseLabel.ZIndex = 6
-	poseLabel.Parent = ESPContainer
+	local standLabel = Instance.new("TextLabel")
+	standLabel.Name = "EspStand_" .. tostring(index)
+	standLabel.BackgroundTransparency = 1
+	standLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
+	standLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
+	standLabel.TextStrokeTransparency = 0.15
+	standLabel.Font = Enum.Font.GothamBold
+	standLabel.TextSize = 10
+	standLabel.Text = "ĐỨNG"
+	standLabel.Visible = false
+	standLabel.Active = false
+	standLabel.ZIndex = 6
+	standLabel.Parent = ESPContainer
+
+	local sitLabel = Instance.new("TextLabel")
+	sitLabel.Name = "EspSit_" .. tostring(index)
+	sitLabel.BackgroundTransparency = 1
+	sitLabel.TextColor3 = Color3.fromRGB(255, 215, 70)
+	sitLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
+	sitLabel.TextStrokeTransparency = 0.15
+	sitLabel.Font = Enum.Font.GothamBold
+	sitLabel.TextSize = 10
+	sitLabel.Text = "NGỒI"
+	sitLabel.Visible = false
+	sitLabel.Active = false
+	sitLabel.ZIndex = 6
+	sitLabel.Parent = ESPContainer
+
+	local proneLabel = Instance.new("TextLabel")
+	proneLabel.Name = "EspProne_" .. tostring(index)
+	proneLabel.BackgroundTransparency = 1
+	proneLabel.TextColor3 = Color3.fromRGB(255, 110, 110)
+	proneLabel.TextStrokeColor3 = Color3.fromRGB(10, 10, 14)
+	proneLabel.TextStrokeTransparency = 0.15
+	proneLabel.Font = Enum.Font.GothamBold
+	proneLabel.TextSize = 10
+	proneLabel.Text = "NẰM"
+	proneLabel.Visible = false
+	proneLabel.Active = false
+	proneLabel.ZIndex = 6
+	proneLabel.Parent = ESPContainer
 
 	local entry = {
 		box = boxFrame,
@@ -1059,17 +1053,9 @@ local function getOrCreateEspEntry(index)
 		hpBg = hpBg,
 		hpFill = hpFill,
 		dist = distLabel,
-		pose = poseLabel,
-		lastBoxX = nil,
-		lastBoxY = nil,
-		lastBoxW = nil,
-		lastBoxH = nil,
-		lastBoxColor = nil,
-		lastHpRatio = nil,
-		lastHpColor = nil,
-		lastDistText = nil,
-		lastPoseText = nil,
-		lastPoseColor = nil
+		standPose = standLabel,
+		sitPose = sitLabel,
+		pronePose = proneLabel
 	}
 	EspVisualPool[index] = entry
 	return entry
@@ -1079,21 +1065,24 @@ local function hideUnusedEspEntries(startIndex)
 	for i = startIndex, #EspVisualPool do
 		local entry = EspVisualPool[i]
 		if entry then
-			setVisibleIfChanged(entry.box, false)
-			setVisibleIfChanged(entry.hpBg, false)
-			setVisibleIfChanged(entry.dist, false)
-			setVisibleIfChanged(entry.pose, false)
+			if entry.box then entry.box.Visible = false end
+			if entry.hpBg then entry.hpBg.Visible = false end
+			if entry.dist then entry.dist.Visible = false end
+			if entry.standPose then entry.standPose.Visible = false end
+			if entry.sitPose then entry.sitPose.Visible = false end
+			if entry.pronePose then entry.pronePose.Visible = false end
 		end
 	end
 end
 
-local function getEnemyStanceLabel(model, hum, hrp, head, torso)
+local function getEnemyStanceState(model, hum, hrp, head)
 	if not model or not hum then
-		return "ĐỨNG", Color3.fromRGB(245, 248, 255)
+		return "STAND"
 	end
 
-	local anchorPart = (torso and torso:IsA("BasePart") and torso)
-		or (hrp and hrp:IsA("BasePart") and hrp)
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp)
+		or (torso and torso:IsA("BasePart") and torso)
 		or (head and head:IsA("BasePart") and head)
 		or nil
 
@@ -1111,14 +1100,9 @@ local function getEnemyStanceLabel(model, hum, hrp, head, torso)
 	end
 
 	if isProne then
-		return "NẰM", Color3.fromRGB(255, 110, 110)
+		return "PRONE"
 	end
 
-	local okState, humState = pcall(function() return hum:GetState() end)
-	local isJumpingState = okState and (
-		humState == Enum.HumanoidStateType.Jumping
-		or humState == Enum.HumanoidStateType.Freefall
-	)
 	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
 	local hipHeight = tonumber(hum.HipHeight) or 2
 	local isCrouchedByHeight = false
@@ -1131,14 +1115,10 @@ local function getEnemyStanceLabel(model, hum, hrp, head, torso)
 	end
 
 	if hasSeatPart or hum.Sit or isCrouchedByHeight then
-		return "NGỒI", Color3.fromRGB(255, 215, 70)
+		return "SIT"
 	end
 
-	if isJumpingState or (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.AssemblyLinearVelocity) and hrp.AssemblyLinearVelocity.Y > 8.5 and hum.FloorMaterial == Enum.Material.Air) then
-		return "NHẢY", Color3.fromRGB(115, 220, 255)
-	end
-
-	return "ĐỨNG", Color3.fromRGB(245, 248, 255)
+	return "STAND"
 end
 
 local function getHealthColor(ratio)
@@ -1187,16 +1167,6 @@ local function checkWallOcclusion(model, targetPart, aimPos, hum)
 	return true, false
 end
 
-local function getCachedEspWallBlocked(model, anchor, hum)
-	local cached = EspWallCache[model]
-	if cached and (elapsedClock - cached.t) < 0.28 then
-		return cached.blocked
-	end
-	local blocked = checkWallOcclusion(model, anchor, anchor.Position, hum)
-	EspWallCache[model] = { blocked = blocked, t = elapsedClock }
-	return blocked
-end
-
 local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
 	if not wallFlag then return true end
 	local isBlocked, bypassWall = checkWallOcclusion(model, targetPart, aimPos, hum)
@@ -1222,32 +1192,54 @@ local function isEnemyPlayer(player)
 	return hum ~= nil and hum.Health > 0
 end
 
-local function getCompactCharacterScreenBox(model, hum, hrp, head, torso, anchor, cam, vp)
+local function getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
 	if not model or not cam or not anchor or not isFiniteVector3(anchor.Position) then
 		return nil
+	end
+
+	local torso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("Torso")
+	local limbNames = {
+		"LeftFoot", "RightFoot",
+		"LeftLowerLeg", "RightLowerLeg",
+		"LeftUpperLeg", "RightUpperLeg",
+		"Left Leg", "Right Leg"
+	}
+
+	local highestY = -math.huge
+	local lowestY = math.huge
+	local foundPart = false
+
+	local function scanPartVertical(p, topPad, botPad)
+		if not p or not p:IsA("BasePart") or not isFiniteVector3(p.Position) then return end
+		local halfY = p.Size.Y * 0.5
+		highestY = math.max(highestY, p.Position.Y + halfY + (topPad or 0))
+		lowestY = math.min(lowestY, p.Position.Y - halfY - (botPad or 0))
+		foundPart = true
+	end
+
+	if head and head:IsA("BasePart") then
+		scanPartVertical(head, 0.12, 0.0)
+	end
+	if torso and torso:IsA("BasePart") then
+		scanPartVertical(torso, 0.0, 0.0)
+	end
+	for _, n in ipairs(limbNames) do
+		local lp = model:FindFirstChild(n)
+		if lp and lp:IsA("BasePart") then
+			scanPartVertical(lp, 0.0, 0.08)
+		end
 	end
 
 	local centerWorld = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchor.Position
 	local hipHeight = (hum and tonumber(hum.HipHeight)) or 2
 
-	local highestY = -math.huge
-	local lowestY = math.huge
-	if head and head:IsA("BasePart") and isFiniteVector3(head.Position) then
-		highestY = math.max(highestY, head.Position.Y + head.Size.Y * 0.5 + 0.12)
-		lowestY = math.min(lowestY, head.Position.Y - head.Size.Y * 0.5)
-	end
-	if torso and torso:IsA("BasePart") and isFiniteVector3(torso.Position) then
-		highestY = math.max(highestY, torso.Position.Y + torso.Size.Y * 0.5)
-		lowestY = math.min(lowestY, torso.Position.Y - torso.Size.Y * 0.5)
-	end
-
-	if highestY == -math.huge then
+	if not foundPart then
 		highestY = centerWorld.Y + math.max(1.8, hipHeight + 1.1)
-	end
-	if lowestY == math.huge then
 		lowestY = centerWorld.Y - math.max(1.8, hipHeight + 0.9)
 	else
-		lowestY = math.min(lowestY, centerWorld.Y - math.max(1.6, hipHeight + 0.65))
+		if hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position) then
+			lowestY = math.min(lowestY, hrp.Position.Y - math.max(1.6, hipHeight + 0.65))
+		end
 	end
 
 	local topWorld = Vector3.new(centerWorld.X, highestY, centerWorld.Z)
@@ -1287,84 +1279,91 @@ local function updateESPVisuals(cam, originPos)
 	if ESPContainer.Parent ~= ScreenGui and ScreenGui then
 		ESPContainer.Parent = ScreenGui
 	end
-	setVisibleIfChanged(ESPContainer, true)
-
+	ESPContainer.Visible = true
 	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
-	local maxStudsLimit = math.max(maxEspDist, maxEspDist / 0.28)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
 		hideUnusedEspEntries(1)
 		return
 	end
 
-	table.clear(EspCandidatesBuf)
-	table.clear(EspSeenModelsBuf)
+	local candidates = {}
+	local seenModels = {}
 
 	if shouldTargetPlayers() then
 		for _, player in ipairs(Players:GetPlayers()) do
 			if isEnemyPlayer(player) then
 				local char = player.Character
 				local hum = char and char:FindFirstChildOfClass("Humanoid")
-				if char and hum and hum.Health > 0 and not EspSeenModelsBuf[char] then
-					EspSeenModelsBuf[char] = true
-					table.insert(EspCandidatesBuf, { model = char, hum = hum })
+				if char and hum and hum.Health > 0 and not seenModels[char] then
+					seenModels[char] = true
+					table.insert(candidates, { model = char, hum = hum })
 				end
 			end
 		end
 	end
 
 	if shouldTargetNpcs() then
-		for i = #CachedNpcEntries, 1, -1 do
-			local entry = CachedNpcEntries[i]
+		for _, entry in ipairs(CachedNpcEntries) do
 			local npcModel = entry.model
 			local hum = entry.hum
-			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 then
-				if not EspSeenModelsBuf[npcModel] then
-					EspSeenModelsBuf[npcModel] = true
-					table.insert(EspCandidatesBuf, entry)
+			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 and not seenModels[npcModel] then
+				seenModels[npcModel] = true
+				table.insert(candidates, { model = npcModel, hum = hum })
+			end
+		end
+		for _, obj in ipairs(Workspace:GetDescendants()) do
+			if obj:IsA("Model") and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character and not seenModels[obj] then
+				local hum = obj:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 then
+					seenModels[obj] = true
+					table.insert(candidates, { model = obj, hum = hum })
 				end
-			else
-				table.remove(CachedNpcEntries, i)
 			end
 		end
 	end
 
+	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
+	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
+
 	local visualIndex = 0
-	for _, item in ipairs(EspCandidatesBuf) do
+	for _, item in ipairs(candidates) do
 		local model = item.model
 		local hum = item.hum
-		local hrp, head, torso, anchor = getModelRigParts(model)
+		local hrp = model:FindFirstChild("HumanoidRootPart")
+		local head = model:FindFirstChild("Head")
+		local anchor = (hrp and hrp:IsA("BasePart") and hrp)
+			or (head and head:IsA("BasePart") and head)
+			or model:FindFirstChildWhichIsA("BasePart")
 
 		if anchor and isFiniteVector3(anchor.Position) then
 			local distStuds = (anchor.Position - originPos).Magnitude
-			if distStuds <= maxStudsLimit then
-				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, torso, anchor, cam, vp)
+			local distMeters = math.floor(distStuds * 0.28 + 0.5)
+
+			if distStuds <= math.max(maxEspDist, maxEspDist / 0.28) or distMeters <= maxEspDist then
+				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
 				if boxLeft then
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
 					if entry then
-						local boxColor = COLOR_ESP_CLEAR_GREEN
-						if Config.ESPWallCheck and getCachedEspWallBlocked(model, anchor, hum) then
-							boxColor = COLOR_ESP_WALL_WHITE
+						local isBlocked = false
+						if Config.ESPWallCheck then
+							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
+							isBlocked = blockedFlag
 						end
+						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
 
 						if entry.box then
 							if Config.ESPBox then
-								if entry.lastBoxX ~= boxLeft or entry.lastBoxY ~= boxTop or entry.lastBoxW ~= boxW or entry.lastBoxH ~= boxH then
-									entry.lastBoxX = boxLeft
-									entry.lastBoxY = boxTop
-									entry.lastBoxW = boxW
-									entry.lastBoxH = boxH
-									entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
-									entry.box.Size = UDim2.new(0, boxW, 0, boxH)
-								end
-								if entry.stroke and entry.lastBoxColor ~= boxColor then
-									entry.lastBoxColor = boxColor
+								entry.box.Position = UDim2.new(0, boxLeft, 0, boxTop)
+								entry.box.Size = UDim2.new(0, boxW, 0, boxH)
+								if entry.stroke then
 									entry.stroke.Color = boxColor
+									entry.stroke.Thickness = 1.4
 								end
-								setVisibleIfChanged(entry.box, true)
+								entry.box.Visible = true
 							else
-								setVisibleIfChanged(entry.box, false)
+								entry.box.Visible = false
 							end
 						end
 
@@ -1374,62 +1373,52 @@ local function updateESPVisuals(cam, originPos)
 								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
 								local barW = 5
 								local barLeft = boxLeft - barW - 3
-								if entry.lastBoxX ~= boxLeft or entry.lastBoxY ~= boxTop or entry.lastBoxH ~= boxH then
-									entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
-									entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
-								end
-								if entry.lastHpRatio ~= hpRatio then
-									entry.lastHpRatio = hpRatio
-									entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
-									entry.hpFill.Position = UDim2.new(0, 0, 1 - hpRatio, 0)
-									local hpCol = getHealthColor(hpRatio)
-									if entry.lastHpColor ~= hpCol then
-										entry.lastHpColor = hpCol
-										entry.hpFill.BackgroundColor3 = hpCol
-									end
-								end
-								setVisibleIfChanged(entry.hpBg, true)
+								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
+								entry.hpBg.Size = UDim2.new(0, barW, 0, boxH)
+								entry.hpFill.Size = UDim2.new(1, 0, hpRatio, 0)
+								entry.hpFill.Position = UDim2.new(0, 0, 1 - hpRatio, 0)
+								entry.hpFill.BackgroundColor3 = getHealthColor(hpRatio)
+								entry.hpBg.Visible = true
 							else
-								setVisibleIfChanged(entry.hpBg, false)
+								entry.hpBg.Visible = false
 							end
 						end
 
 						if entry.dist then
 							if Config.ESPDistance then
-								local distMeters = math.floor(distStuds * 0.28 + 0.5)
-								local distStr = tostring(distMeters) .. "m"
-								if entry.lastDistText ~= distStr then
-									entry.lastDistText = distStr
-									entry.dist.Text = distStr
-								end
+								entry.dist.Text = tostring(distMeters) .. "m"
 								entry.dist.Position = UDim2.new(0, boxLeft, 0, boxTop + boxH + 2)
 								entry.dist.Size = UDim2.new(0, math.max(boxW, 28), 0, 14)
-								setVisibleIfChanged(entry.dist, true)
+								entry.dist.Visible = true
 							else
-								setVisibleIfChanged(entry.dist, false)
+								entry.dist.Visible = false
 							end
 						end
 
-						if entry.pose then
+						-- Tách riêng từng nhãn ĐỨNG / NGỒI / NẰM và cho phép bật/tắt bằng ESPStance
+						if entry.standPose and entry.sitPose and entry.pronePose then
 							if Config.ESPStance then
-								local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head, torso)
-								local labelW = math.max(boxW, 56)
-								local labelLeft = math.floor(boxLeft + boxW * 0.5 - labelW * 0.5)
-								-- Gắn dính sát ngay mép trên của khung Box 2D (khi bật Box) để không bị tách rời
-								local labelTop = Config.ESPBox and (boxTop - 12) or (boxTop - 16)
-								if entry.lastPoseText ~= stanceText then
-									entry.lastPoseText = stanceText
-									entry.pose.Text = stanceText
-								end
-								if entry.lastPoseColor ~= stanceColor then
-									entry.lastPoseColor = stanceColor
-									entry.pose.TextColor3 = stanceColor
-								end
-								entry.pose.Position = UDim2.new(0, labelLeft, 0, labelTop)
-								entry.pose.Size = UDim2.new(0, labelW, 0, 12)
-								setVisibleIfChanged(entry.pose, true)
+								local stanceState = getEnemyStanceState(model, hum, hrp, head)
+								local tagW = 46
+								local tagH = 12
+								local tagLeft = math.floor(boxLeft + boxW * 0.5 - tagW * 0.5)
+								local tagTop = boxTop - tagH - 2
+
+								entry.standPose.Position = UDim2.new(0, tagLeft, 0, tagTop)
+								entry.standPose.Size = UDim2.new(0, tagW, 0, tagH)
+								entry.standPose.Visible = (stanceState == "STAND")
+
+								entry.sitPose.Position = UDim2.new(0, tagLeft, 0, tagTop)
+								entry.sitPose.Size = UDim2.new(0, tagW, 0, tagH)
+								entry.sitPose.Visible = (stanceState == "SIT")
+
+								entry.pronePose.Position = UDim2.new(0, tagLeft, 0, tagTop)
+								entry.pronePose.Size = UDim2.new(0, tagW, 0, tagH)
+								entry.pronePose.Visible = (stanceState == "PRONE")
 							else
-								setVisibleIfChanged(entry.pose, false)
+								entry.standPose.Visible = false
+								entry.sitPose.Visible = false
+								entry.pronePose.Visible = false
 							end
 						end
 					end
@@ -1796,7 +1785,7 @@ pcall(function()
 	local TrigFOVMinus, TrigFOVPlus
 	TriggerFOVLabel, TrigFOVMinus, TrigFOVPlus = createStepper(silentPage, "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius), "-1", "+1", Color3.fromRGB(255, 205, 90), 14)
 
-	-- TAB 2: ESP (Đặt Đứng/Ngồi/Nằm/Nhảy ở vị trí 2 để luôn nhìn thấy ngay)
+	-- TAB 2: ESP
 	local espPage = PageFrames["ESP"]
 	ESPEnabledBtn = createButton(espPage, getESPEnabledText(), 1)
 	ESPStanceBtn = createButton(espPage, getESPStanceText(), 2)
@@ -1913,6 +1902,20 @@ pcall(function()
 		ESPEnabledBtn.BackgroundColor3 = Config.ESPEnabled and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 		if not Config.ESPEnabled then hideUnusedEspEntries(1) end
 	end)
+	ESPStanceBtn.MouseButton1Click:Connect(function()
+		Config.ESPStance = not Config.ESPStance
+		ESPStanceBtn.Text = getESPStanceText()
+		ESPStanceBtn.BackgroundColor3 = Config.ESPStance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
+		if not Config.ESPStance then
+			for _, entry in ipairs(EspVisualPool) do
+				if entry then
+					if entry.standPose then entry.standPose.Visible = false end
+					if entry.sitPose then entry.sitPose.Visible = false end
+					if entry.pronePose then entry.pronePose.Visible = false end
+				end
+			end
+		end
+	end)
 	ESPBoxBtn.MouseButton1Click:Connect(function()
 		Config.ESPBox = not Config.ESPBox
 		ESPBoxBtn.Text = getESPBoxText()
@@ -1927,16 +1930,6 @@ pcall(function()
 		Config.ESPDistance = not Config.ESPDistance
 		ESPDistBtn.Text = getESPDistText()
 		ESPDistBtn.BackgroundColor3 = Config.ESPDistance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
-	end)
-	ESPStanceBtn.MouseButton1Click:Connect(function()
-		Config.ESPStance = not Config.ESPStance
-		ESPStanceBtn.Text = getESPStanceText()
-		ESPStanceBtn.BackgroundColor3 = Config.ESPStance and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
-		if not Config.ESPStance then
-			for _, entry in ipairs(EspVisualPool) do
-				if entry then setVisibleIfChanged(entry.pose, false) end
-			end
-		end
 	end)
 	ESPWallBtn.MouseButton1Click:Connect(function()
 		Config.ESPWallCheck = not Config.ESPWallCheck
@@ -2142,7 +2135,6 @@ local function triggerAsyncNpcScan()
 		local newEntries = {}
 		local seen = {}
 		local myChar = LocalPlayer.Character
-		local scanned = 0
 		pcall(function()
 			for _, obj in ipairs(Workspace:GetChildren()) do
 				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] and not seen[obj] then
@@ -2154,8 +2146,6 @@ local function triggerAsyncNpcScan()
 				end
 			end
 			for _, obj in ipairs(Workspace:GetDescendants()) do
-				scanned = scanned + 1
-				if scanned > 6000 then break end
 				if obj:IsA("Model") and obj ~= myChar and not PlayerCharacterSet[obj] and not seen[obj] then
 					local hum = obj:FindFirstChildOfClass("Humanoid")
 					if hum and hum.Health > 0 then
@@ -2392,7 +2382,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 	end
 
 	if checkNpcs then
-		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 1.2 or 2.0) then
+		if elapsedClock - lastNpcScanTime >= (Config.FarRender and 0.6 or 1.2) then
 			lastNpcScanTime = elapsedClock
 			triggerAsyncNpcScan()
 		end
@@ -2416,7 +2406,7 @@ local function findBestTarget(partPicker, fovLimit, wallFlag)
 end
 
 local function updateRainbowUI()
-	if elapsedClock - lastRainbowUpdateTime < 0.05 then return end
+	if elapsedClock - lastRainbowUpdateTime < 0.03 then return end
 	lastRainbowUpdateTime = elapsedClock
 	if isMinimized then
 		if HButtonStroke then HButtonStroke.Color = COLOR_H_BLACK_BORDER end
@@ -2434,17 +2424,17 @@ RunService.RenderStepped:Connect(function(dt)
 	updateRainbowUI()
 
 	pcall(function()
-		if elapsedClock - lastPlayerSetRebuildTime >= 0.4 then
+		if elapsedClock - lastPlayerSetRebuildTime >= 0.25 then
 			lastPlayerSetRebuildTime = elapsedClock
 			rebuildPlayerCharacterSet()
 		end
 
-		if shouldTargetNpcs() and (#CachedNpcEntries == 0 or elapsedClock - lastNpcScanTime >= 2.0) then
+		if shouldTargetNpcs() and (#CachedNpcEntries == 0 or elapsedClock - lastNpcScanTime >= 1.2) then
 			lastNpcScanTime = elapsedClock
 			triggerAsyncNpcScan()
 		end
 
-		if elapsedClock - lastWeaponRangeSyncTime >= 0.5 then
+		if elapsedClock - lastWeaponRangeSyncTime >= 0.4 then
 			lastWeaponRangeSyncTime = elapsedClock
 			syncWeaponRangeAuto()
 		end
@@ -2455,7 +2445,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if Config.FakeLag then
-			if elapsedClock - lastFakeLagSyncTime >= 0.05 then
+			if elapsedClock - lastFakeLagSyncTime >= 0.03 then
 				lastFakeLagSyncTime = elapsedClock
 				syncFakeLagEnemies(true)
 			end
@@ -2463,7 +2453,7 @@ RunService.RenderStepped:Connect(function(dt)
 			syncFakeLagEnemies(false)
 		end
 
-		if elapsedClock - lastSeatCheckTime >= 0.14 then
+		if elapsedClock - lastSeatCheckTime >= 0.1 then
 			lastSeatCheckTime = elapsedClock
 			syncVehicleAutoState()
 		end
@@ -2471,7 +2461,7 @@ RunService.RenderStepped:Connect(function(dt)
 		local cam = Workspace.CurrentCamera
 		local originPos = getOriginPosition(cam)
 
-		if elapsedClock - lastEspRenderTime >= 0.025 then
+		if elapsedClock - lastEspRenderTime >= 0.016 then
 			lastEspRenderTime = elapsedClock
 			updateESPVisuals(cam, originPos)
 		end
@@ -2487,7 +2477,7 @@ RunService.RenderStepped:Connect(function(dt)
 			CachedAimPos = CachedTarget.Position
 			CachedDistance = rawDist
 
-			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.09) then
+			if Config.WallCheck and (elapsedClock - lastWallCheckTime >= 0.06) then
 				lastWallCheckTime = elapsedClock
 				local hum = CachedTarget.Parent:FindFirstChildOfClass("Humanoid")
 				CachedIsWallBlocked, CachedBypassWall = checkWallOcclusion(CachedTarget.Parent, CachedTarget, CachedAimPos, hum)
