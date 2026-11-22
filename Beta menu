@@ -864,17 +864,28 @@ local function getEnemyStanceLabel(model, hum, hrp, head)
 		return hum:GetState()
 	end)
 
-	if hum.Sit or (hum.SeatPart and hum.SeatPart:IsA("BasePart")) or (okState and state == Enum.HumanoidStateType.Seated) then
+	local isActivelyMoving = false
+	if hum.MoveDirection and hum.MoveDirection.Magnitude > 0.12 then
+		isActivelyMoving = true
+	elseif hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.AssemblyLinearVelocity) then
+		local horizSpeed = Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z).Magnitude
+		if horizSpeed > 3.0 then
+			isActivelyMoving = true
+		end
+	end
+
+	local hasSeatPart = (hum.SeatPart ~= nil and hum.SeatPart:IsA("BasePart"))
+	if hasSeatPart or (not isActivelyMoving and (hum.Sit or (okState and state == Enum.HumanoidStateType.Seated))) then
 		return "NGỒI", Color3.fromRGB(255, 215, 70)
 	end
 
 	local isProne = false
-	if okState and (state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.FallingDown) then
+	if not isActivelyMoving and okState and (state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.FallingDown) then
 		isProne = true
 	end
 
 	local anchorPart = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
-	if anchorPart and isFiniteVector3(anchorPart.Position) then
+	if not isActivelyMoving and anchorPart and isFiniteVector3(anchorPart.Position) then
 		local upVec = anchorPart.CFrame.UpVector
 		local flatBody = isFiniteVector3(upVec) and (math.abs(upVec.Y) < 0.25)
 		local headOffsetSmall = false
