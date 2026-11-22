@@ -146,6 +146,18 @@ local function isFiniteNumber(n)
 	return typeof(n) == "number" and n == n and n > -math.huge and n < math.huge
 end
 
+local function safeNum(n, fallback)
+	return isFiniteNumber(n) and n or (fallback or 0)
+end
+
+local function safeFloor(n, fallback)
+	if not isFiniteNumber(n) then
+		return fallback or 0
+	end
+	local clamped = math.clamp(n, -1e7, 1e7)
+	return math.floor(clamped)
+end
+
 local function isFiniteVector3(v)
 	return typeof(v) == "Vector3"
 		and isFiniteNumber(v.X)
@@ -345,7 +357,7 @@ local function applyConfigTable(tbl)
 			Config[k] = tbl[k]
 		end
 	end
-	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	Config.ESPMaxDistance = math.clamp(safeNum(Config.ESPMaxDistance, 350), 150, 1500)
 	userDesiredEnabled = Config.Enabled
 end
 
@@ -503,7 +515,7 @@ local function updateFOVVisual()
 		FOVLabel.Text = "FOV Silent: " .. tostring(Config.FOVRadius)
 	end
 	if TriggerFOVFrame then
-		local clampedTrigFOV = math.clamp(Config.TriggerFOVRadius, 1, 10)
+		local clampedTrigFOV = math.clamp(safeNum(Config.TriggerFOVRadius, 6), 1, 10)
 		Config.TriggerFOVRadius = clampedTrigFOV
 		TriggerFOVFrame.Size = UDim2.new(0, clampedTrigFOV * 2, 0, clampedTrigFOV * 2)
 		TriggerFOVFrame.Visible = (not pausedByVehicle) and Config.TriggerBot and Config.ShowTriggerFOV
@@ -512,7 +524,7 @@ local function updateFOVVisual()
 		TriggerFOVLabel.Text = "FOV Tự bắn: " .. tostring(Config.TriggerFOVRadius)
 	end
 	if ESPDistLabel then
-		Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+		Config.ESPMaxDistance = math.clamp(safeNum(Config.ESPMaxDistance, 350), 150, 1500)
 		ESPDistLabel.Text = getESPDistRangeText()
 	end
 end
@@ -668,7 +680,7 @@ local function pickModelTargetPart(model)
 		local hasHead = head and head:IsA("BasePart")
 		local fallbackBody = (hrp and hrp:IsA("BasePart") and hrp) or (torso and torso:IsA("BasePart") and torso) or nil
 		if hasHead and fallbackBody then
-			local chance = math.clamp(tonumber(Config.HeadshotChance) or 50, 0, 100)
+			local chance = math.clamp(safeNum(Config.HeadshotChance, 50), 0, 100)
 			return (math.random(1, 100) <= chance) and head or fallbackBody
 		end
 		return (hasHead and head) or fallbackBody or nil
@@ -976,9 +988,8 @@ local function isEnemyPlayer(player)
 end
 
 local function getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
-	local anchorPos = anchor.Position
+	local anchorPos = isFiniteVector3(anchor.Position) and anchor.Position or Vector3.zero
 	if Config.ESPCompactLock then
-		-- Khóa cứng kích thước gọn cân đối theo dáng nhân vật để không bị biến dạng
 		local lockedCenter = (hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position)) and hrp.Position or anchorPos
 		return lockedCenter, 4.35, 2.25
 	end
@@ -991,10 +1002,10 @@ local function getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
 		return model:GetBoundingBox()
 	end)
 	if okBox and typeof(boxCf) == "CFrame" and typeof(boxSize) == "Vector3" and isFiniteVector3(boxSize) then
-		if boxSize.Y > 0.5 and boxSize.Y < 25 then
+		if isFiniteNumber(boxSize.Y) and boxSize.Y > 0.5 and boxSize.Y < 25 then
 			charHeight = math.min(boxSize.Y, 5.4)
 		end
-		local horizMax = math.max(boxSize.X, boxSize.Z)
+		local horizMax = math.max(safeNum(boxSize.X, 2.6), safeNum(boxSize.Z, 2.6))
 		if horizMax > 0.4 and horizMax < 15 then
 			charWidth = math.min(horizMax, 2.8)
 		end
@@ -1015,15 +1026,15 @@ local function updateESPVisuals(cam, originPos)
 		hideUnusedEspEntries(1)
 		return
 	end
-	if not Config.ESPEnabled or (not Config.ESPBox and not Config.ESPHealthBar and not Config.ESPDistance) then
+	if not Config.ESPEnabled then
 		hideUnusedEspEntries(1)
 		return
 	end
 
 	ESPContainer.Visible = true
-	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
+	local maxEspDist = math.clamp(safeNum(Config.ESPMaxDistance, 350), 150, 1500)
 	local vp = cam.ViewportSize
-	if vp.X <= 0 or vp.Y <= 0 then
+	if not isFiniteNumber(vp.X) or not isFiniteNumber(vp.Y) or vp.X <= 0 or vp.Y <= 0 then
 		hideUnusedEspEntries(1)
 		return
 	end
@@ -1064,8 +1075,10 @@ local function updateESPVisuals(cam, originPos)
 		end
 	end
 
-	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
-	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
+	local fovDeg = math.clamp(safeNum(cam.FieldOfView, 70), 10, 120)
+	local fovTanHalf = math.max(math.tan(math.rad(fovDeg * 0.5)), 0.05)
+	local projScaleY = (vp.Y * 0.5) / fovTanHalf
+	local safeOrigin = isFiniteVector3(originPos) and originPos or cam.CFrame.Position
 
 	local visualIndex = 0
 	for _, item in ipairs(candidates) do
@@ -1076,17 +1089,31 @@ local function updateESPVisuals(cam, originPos)
 		local anchor = (hrp and hrp:IsA("BasePart") and hrp) or (head and head:IsA("BasePart") and head) or nil
 
 		if anchor and isFiniteVector3(anchor.Position) then
-			local distStuds = (anchor.Position - originPos).Magnitude
-			local distMeters = math.floor(distStuds * 0.28 + 0.5)
+			local distStuds = (anchor.Position - safeOrigin).Magnitude
+			local distMeters = safeFloor(distStuds * 0.28 + 0.5, 0)
 
 			if distStuds <= maxEspDist or distMeters <= maxEspDist then
 				local centerWorld, charHeight, charWidth = getCharacterBoxWorldMetrics(model, hum, hrp, head, anchor)
 				local screenCenter, onScreen = cam:WorldToViewportPoint(centerWorld)
-				local rx, ry, rz = screenCenter.X, screenCenter.Y, screenCenter.Z
+				local rx = safeNum(screenCenter.X, -1)
+				local ry = safeNum(screenCenter.Y, -1)
+				local rz = safeNum(screenCenter.Z, 0)
 
-				if onScreen and isFiniteNumber(rx) and isFiniteNumber(ry) and isFiniteNumber(rz) and rz > 0.25 then
-					local rawBoxH = (charHeight * projScaleY) / rz
-					local rawBoxW = (charWidth * projScaleY) / rz
+				local topWorld = (head and head:IsA("BasePart") and isFiniteVector3(head.Position))
+					and (head.Position + Vector3.new(0, 0.9, 0))
+					or (centerWorld + Vector3.new(0, charHeight * 0.55, 0))
+				local screenTop, topOnScreen = cam:WorldToViewportPoint(topWorld)
+				local tx = safeNum(screenTop.X, rx)
+				local ty = safeNum(screenTop.Y, ry)
+				local tz = safeNum(screenTop.Z, rz)
+
+				if (onScreen and rz > 0.25) or (topOnScreen and tz > 0.25) then
+					local activeZ = (onScreen and rz > 0.25) and rz or tz
+					local activeX = (onScreen and rz > 0.25) and rx or tx
+					local activeY = (onScreen and rz > 0.25) and ry or ty
+
+					local rawBoxH = (safeNum(charHeight, 4.35) * projScaleY) / math.max(activeZ, 0.25)
+					local rawBoxW = (safeNum(charWidth, 2.25) * projScaleY) / math.max(activeZ, 0.25)
 
 					local boxHeight, boxWidth
 					if Config.ESPCompactLock then
@@ -1098,10 +1125,10 @@ local function updateESPVisuals(cam, originPos)
 						boxWidth = math.clamp(rawBoxW, math.max(7, boxHeight * 0.38), vp.X * 0.45)
 					end
 
-					local boxLeft = math.floor(rx - boxWidth * 0.5)
-					local boxTop = math.floor(ry - boxHeight * 0.5)
-					local boxW = math.floor(boxWidth)
-					local boxH = math.floor(boxHeight)
+					local boxLeft = safeFloor(activeX - boxWidth * 0.5, 0)
+					local boxTop = safeFloor(activeY - boxHeight * 0.5, 0)
+					local boxW = math.max(8, safeFloor(boxWidth, 16))
+					local boxH = math.max(12, safeFloor(boxHeight, 24))
 
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
@@ -1109,7 +1136,7 @@ local function updateESPVisuals(cam, originPos)
 						local isBlocked = false
 						if Config.ESPWallCheck then
 							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
-							isBlocked = blockedFlag
+							isBlocked = (blockedFlag == true)
 						end
 						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
 
@@ -1129,8 +1156,8 @@ local function updateESPVisuals(cam, originPos)
 
 						if entry.hpBg and entry.hpFill then
 							if Config.ESPHealthBar then
-								local maxHp = math.max(1, tonumber(hum.MaxHealth) or 100)
-								local hpRatio = math.clamp((tonumber(hum.Health) or 0) / maxHp, 0, 1)
+								local maxHp = math.max(1, safeNum(hum.MaxHealth, 100))
+								local hpRatio = math.clamp(safeNum(hum.Health, 0) / maxHp, 0, 1)
 								local barW = Config.ESPCompactLock and 3 or 4
 								local barLeft = boxLeft - barW - 3
 								entry.hpBg.Position = UDim2.new(0, barLeft, 0, boxTop)
@@ -1156,19 +1183,16 @@ local function updateESPVisuals(cam, originPos)
 						end
 
 						if entry.pose then
-							if Config.ESPBox or Config.ESPDistance or Config.ESPHealthBar then
-								local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head)
-								local labelW = math.max(boxW, 56)
-								local labelLeft = math.floor(rx - labelW * 0.5)
-								local labelTop = boxTop - 16
-								entry.pose.Text = stanceText
-								entry.pose.TextColor3 = stanceColor
-								entry.pose.Position = UDim2.new(0, labelLeft, 0, labelTop)
-								entry.pose.Size = UDim2.new(0, labelW, 0, 14)
-								entry.pose.Visible = true
-							else
-								entry.pose.Visible = false
-							end
+							-- Đứng / Ngồi / Nằm bám trực tiếp theo tọa độ từng NPC / Player, không phụ thuộc Box
+							local stanceText, stanceColor = getEnemyStanceLabel(model, hum, hrp, head)
+							local labelW = 64
+							local standAnchorTop = (topOnScreen and tz > 0.25) and safeFloor(ty - 16, boxTop - 16) or (boxTop - 16)
+							local standAnchorX = (topOnScreen and tz > 0.25) and safeFloor(tx - labelW * 0.5, boxLeft) or safeFloor(activeX - labelW * 0.5, boxLeft)
+							entry.pose.Text = stanceText
+							entry.pose.TextColor3 = stanceColor
+							entry.pose.Position = UDim2.new(0, standAnchorX, 0, standAnchorTop)
+							entry.pose.Size = UDim2.new(0, labelW, 0, 14)
+							entry.pose.Visible = true
 						end
 					end
 				end
@@ -1673,11 +1697,11 @@ pcall(function()
 		ESPWallBtn.BackgroundColor3 = Config.ESPWallCheck and Color3.fromRGB(56, 118, 29) or COLOR_ITEM_DARK
 	end)
 	ESPDistMinus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.max(150, (tonumber(Config.ESPMaxDistance) or 350) - 150)
+		Config.ESPMaxDistance = math.max(150, (safeNum(Config.ESPMaxDistance, 350)) - 150)
 		updateFOVVisual()
 	end)
 	ESPDistPlus.MouseButton1Click:Connect(function()
-		Config.ESPMaxDistance = math.min(1500, (tonumber(Config.ESPMaxDistance) or 350) + 150)
+		Config.ESPMaxDistance = math.min(1500, (safeNum(Config.ESPMaxDistance, 350)) + 150)
 		updateFOVVisual()
 	end)
 	AntiKickBtn.MouseButton1Click:Connect(function()
@@ -1942,9 +1966,9 @@ local function computePredictedPosition(origin, part, velocity)
 	local nearScale = math.clamp((dist - 18) / 45, 0, 1)
 	if nearScale <= 0.05 then return basePos end
 
-	local effectiveSpeed = math.max(350, tonumber(Config.BulletSpeed) or 950)
+	local effectiveSpeed = math.max(350, safeNum(Config.BulletSpeed, 950))
 	local rawLead = dist / effectiveSpeed
-	local maxLead = math.min(tonumber(Config.MaxLeadTime) or 0.24, 0.22)
+	local maxLead = math.min(safeNum(Config.MaxLeadTime, 0.24), 0.22)
 	local leadTime = math.clamp(rawLead * nearScale * 0.75, 0, maxLead)
 
 	local predicted = basePos + (velocity * leadTime)
@@ -2016,7 +2040,7 @@ local function isEnemyInsideTriggerFOV(cam, originPos, trigFOV)
 	local vp = cam.ViewportSize
 	local centerX = vp.X * 0.5
 	local centerY = vp.Y * 0.5
-	local radius = math.clamp(tonumber(trigFOV) or 6, 1, 10)
+	local radius = math.clamp(safeNum(trigFOV, 6), 1, 10)
 
 	if shouldTargetPlayers() then
 		for _, player in ipairs(Players:GetPlayers()) do
@@ -2095,8 +2119,8 @@ local function pulseTriggerFire()
 	if VirtualInputManager then
 		local cam = Workspace.CurrentCamera
 		local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-		local clickX = math.floor(vp.X * 0.5)
-		local clickY = math.floor(vp.Y * 0.5)
+		local clickX = safeFloor(vp.X * 0.5, 640)
+		local clickY = safeFloor(vp.Y * 0.5, 360)
 		pcall(function()
 			VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
 		end)
@@ -2117,7 +2141,7 @@ local function isWithinSafeServerAngle(cam, worldPos)
 	if toTarget.Magnitude <= 14 then return true end
 	local dot = math.clamp(lookDir.Unit:Dot(toTarget.Unit), -1, 1)
 	local angleDeg = math.deg(math.acos(dot))
-	local limitDeg = math.max(tonumber(Config.MaxSafeAngleDeg) or 28, 65)
+	local limitDeg = math.max(safeNum(Config.MaxSafeAngleDeg, 28), 65)
 	return angleDeg <= limitDeg
 end
 
@@ -2272,7 +2296,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if Config.TriggerBot and not pausedByVehicle then
-			local trigRadius = math.clamp(tonumber(Config.TriggerFOVRadius) or 6, 1, 10)
+			local trigRadius = math.clamp(safeNum(Config.TriggerFOVRadius, 6), 1, 10)
 			if isEnemyInsideTriggerFOV(cam, originPos, trigRadius) then
 				pulseTriggerFire()
 			end
