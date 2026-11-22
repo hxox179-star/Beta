@@ -122,9 +122,6 @@ local PlayerCharacterSet = {}
 local FakeLagFrozenParts = {}
 local FakeLagPendingShots = {}
 local FakeLagWasActive = false
-local FakeLagAnchorCFrame = nil
-local FakeLagLastBurstTime = 0
-local FakeLagBurstPhase = false
 
 local OriginalRenderState = {
 	Captured = false,
@@ -187,8 +184,6 @@ end
 
 local function releaseFakeLagState()
 	FakeLagWasActive = false
-	FakeLagAnchorCFrame = nil
-	FakeLagBurstPhase = false
 	for part, state in pairs(FakeLagFrozenParts) do
 		if part and part.Parent and part:IsA("BasePart") then
 			pcall(function()
@@ -203,29 +198,6 @@ local function releaseFakeLagState()
 	flushFakeLagPendingShots()
 end
 
-local function getLocalRootPart()
-	local char = LocalPlayer and LocalPlayer.Character
-	if not char then return nil end
-	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if hrp and hrp:IsA("BasePart") and isFiniteVector3(hrp.Position) then
-		return hrp
-	end
-	return char:FindFirstChildWhichIsA("BasePart")
-end
-
-local function isMovementOrReplicationRemote(inst)
-	if not inst or not (inst:IsA("RemoteEvent") or inst:IsA("UnreliableRemoteEvent")) then
-		return false
-	end
-	local lower = string.lower(inst.Name or "")
-	return string.find(lower, "move", 1, true)
-		or string.find(lower, "cframe", 1, true)
-		or string.find(lower, "pos", 1, true)
-		or string.find(lower, "replicat", 1, true)
-		or string.find(lower, "sync", 1, true)
-		or string.find(lower, "step", 1, true)
-end
-
 local function syncFakeLagEnemies(enabled)
 	if not enabled then
 		if FakeLagWasActive or next(FakeLagFrozenParts) ~= nil or #FakeLagPendingShots > 0 then
@@ -235,28 +207,61 @@ local function syncFakeLagEnemies(enabled)
 	end
 
 	FakeLagWasActive = true
-	local hrp = getLocalRootPart()
-	if not hrp then return end
+	local myChar = LocalPlayer and LocalPlayer.Character
+	local activePartSet = {}
 
-	-- Nhịp Server Fake Lag: chốt mốc vị trí gửi lên server theo chu kỳ ngắn (~0.18s giữ mốc, ~0.05s nhả/đẩy nhịp)
-	-- giúp phía server nhận vị trí giật/khựng theo nhịp thay vì khóa cứng cục bộ vô dụng.
-	local cycle = elapsedClock - FakeLagLastBurstTime
-	if not FakeLagAnchorCFrame or cycle >= 0.23 then
-		FakeLagLastBurstTime = elapsedClock
-		FakeLagAnchorCFrame = hrp.CFrame
-		FakeLagBurstPhase = true
-		pcall(function()
-			hrp.AssemblyLinearVelocity = Vector3.zero
-			hrp.AssemblyAngularVelocity = Vector3.zero
-		end)
-	elseif cycle >= 0.05 then
-		FakeLagBurstPhase = false
-		if FakeLagAnchorCFrame and (hrp.Position - FakeLagAnchorCFrame.Position).Magnitude > 0.15 then
-			pcall(function()
-				hrp.CFrame = FakeLagAnchorCFrame
-				hrp.AssemblyLinearVelocity = Vector3.zero
-				hrp.AssemblyAngularVelocity = Vector3.zero
-			end)
+	local function freezeModelParts(model)
+		if not model or not model.Parent or model == myChar or PlayerCharacterSet[model] then return end
+		local hum = model:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then return end
+
+		for _, desc in ipairs(model:GetDescendants()) do
+			if desc:IsA("BasePart") and isFiniteVector3(desc.Position) then
+				activePartSet[desc] = true
+				if not FakeLagFrozenParts[desc] then
+					FakeLagFrozenParts[desc] = {
+						Anchored = desc.Anchored,
+						CFrame = desc.CFrame,
+						Velocity = desc.AssemblyLinearVelocity
+					}
+					pcall(function()
+						desc.AssemblyLinearVelocity = Vector3.zero
+						desc.AssemblyAngularVelocity = Vector3.zero
+						desc.Anchored = true
+					end)
+				else
+					pcall(function()
+						desc.AssemblyLinearVelocity = Vector3.zero
+						desc.AssemblyAngularVelocity = Vector3.zero
+						if desc.Anchored ~= true then
+							desc.Anchored = true
+						end
+					end)
+				end
+			end
+		end
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			freezeModelParts(player.Character)
+		end
+	end
+
+	for _, entry in ipairs(CachedNpcEntries) do
+		if entry and entry.model then
+			freezeModelParts(entry.model)
+		end
+	end
+
+	for part, state in pairs(FakeLagFrozenParts) do
+		if not activePartSet[part] then
+			if part and part.Parent and part:IsA("BasePart") then
+				pcall(function()
+					part.Anchored = state.Anchored == true
+				end)
+			end
+			FakeLagFrozenParts[part] = nil
 		end
 	end
 end
@@ -1524,7 +1529,7 @@ pcall(function()
 	HButton.InputBegan:Connect(beginDrag)
 
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType.MouseMovement) then
+		if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
 			local delta = input.Position - dragStart
 			if delta.Magnitude > 5 then movedWhileDrag = true end
 			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -2376,7 +2381,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 
 		if Config.FakeLag then
-			if elapsedClock - lastFakeLagSyncTime >= 0.016 then
+			if elapsedClock - lastFakeLagSyncTime >= 0.03 then
 				lastFakeLagSyncTime = elapsedClock
 				syncFakeLagEnemies(true)
 			end
@@ -2560,16 +2565,6 @@ pcall(function()
 	oldNamecall = safeHookMetamethod(game, "__namecall", function(self, ...)
 		local okMethod, method = pcall(getnamecallmethod)
 		if okMethod then
-			if Config.FakeLag and not isCallerOwnScript() and isMovementOrReplicationRemote(self) then
-				if method == "FireServer" then
-					if not FakeLagBurstPhase then
-						table.insert(FakeLagPendingShots, { remote = self, args = { ... } })
-						logHookHit("FakeLag Buffered Sync Remote: " .. tostring(self.Name))
-						return nil
-					end
-				end
-			end
-
 			if Config.AntiKickClient then
 				if method == "Kick" and self == LocalPlayer then
 					logHookHit("Blocked __namecall Kick")
