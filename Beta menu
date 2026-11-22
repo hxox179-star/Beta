@@ -73,10 +73,6 @@ local TabButtons = {}
 local ToggleSilentBtn, FakeLagBtn, ToggleTriggerFOVBtn, AutoSeatBtn, AntiKickBtn, SafeAngleBtn, AimModeBtn, ToggleFOVBtn, TargetPartBtn, HeadshotChanceBtn, AutoRangeBtn, TeamCheckBtn, WallCheckBtn, SevenFingerBtn, FarRenderBtn, TriggerBotBtn, TriggerWallBtn, ESPEnabledBtn, ESPBoxBtn, ESPHealthBtn, ESPDistBtn, ESPWallBtn, SaveBtn, AutoLoadToggleBtn, DeleteSaveBtn, ResetBtn, DebugLogBtn, MinBtn
 local mainStroke
 local EspVisualPool = {}
-local EspWallCache = {}
-local EspCandidatesBuf = {}
-local EspSeenModelsBuf = {}
-local SharedFilterBuf = { nil, nil }
 
 local COLOR_TRIGGER_AMBER = Color3.fromRGB(255, 190, 35)
 local COLOR_ESP_CLEAR_GREEN = Color3.fromRGB(45, 235, 115)
@@ -505,19 +501,6 @@ local function serializeValue(val, depth)
 	return "nil"
 end
 
-local function safeEvalLuaTable(raw)
-	if type(raw) ~= "string" or raw == "" then return nil end
-	local loader = (type(loadstring) == "function" and loadstring) or (type(load) == "function" and load) or nil
-	if not loader then return nil end
-	local okFn, fn = pcall(loader, raw)
-	if not okFn or type(fn) ~= "function" then return nil end
-	local okRun, data = pcall(fn)
-	if okRun and type(data) == "table" then
-		return data
-	end
-	return nil
-end
-
 local function applyConfigTable(tbl)
 	if type(tbl) ~= "table" then return end
 	local defaults = getDefaultConfig()
@@ -526,22 +509,20 @@ local function applyConfigTable(tbl)
 			Config[k] = tbl[k]
 		end
 	end
-	Config.FakeLag = false
 	Config.ESPMaxDistance = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
 	userDesiredEnabled = Config.Enabled
-	releaseFakeLagState()
+	if not Config.FakeLag then
+		releaseFakeLagState()
+	end
 end
 
 local function saveConfigByName(rawName)
 	local cleanName = sanitizeSaveName(rawName)
 	Config.SaveName = cleanName
-	Config.FakeLag = false
-	releaseFakeLagState()
 	local snapshot = {}
 	for k, _ in pairs(getDefaultConfig()) do
 		snapshot[k] = Config[k]
 	end
-	snapshot.FakeLag = false
 	MemorySaves[cleanName] = snapshot
 
 	local payload = "return " .. serializeValue(snapshot)
@@ -573,10 +554,13 @@ local function loadAutoLoadMeta()
 		pcall(function() exists = isfile(AUTO_LOAD_META_FILE) end)
 		if exists then
 			local ok, raw = pcall(readfile, AUTO_LOAD_META_FILE)
-			if ok then
-				local data = safeEvalLuaTable(raw)
-				if data then
-					return data.enabled == true, sanitizeSaveName(data.name)
+			if ok and type(raw) == "string" and type(loadstring) == "function" then
+				local fn = loadstring(raw)
+				if type(fn) == "function" then
+					local okRun, data = pcall(fn)
+					if okRun and type(data) == "table" then
+						return data.enabled == true, sanitizeSaveName(data.name)
+					end
 				end
 			end
 		end
@@ -592,17 +576,18 @@ local function loadConfigByName(rawName, silentMode)
 		pcall(function() exists = isfile(path) end)
 		if exists then
 			local ok, raw = pcall(readfile, path)
-			if ok then
-				local data = safeEvalLuaTable(raw)
-				if data then
-					applyConfigTable(data)
-					Config.SaveName = cleanName
-					Config.FakeLag = false
-					releaseFakeLagState()
-					if not silentMode then
-						setSaveStatus("Đã tải save: " .. cleanName, true)
+			if ok and type(raw) == "string" and type(loadstring) == "function" then
+				local fn = loadstring(raw)
+				if type(fn) == "function" then
+					local okRun, data = pcall(fn)
+					if okRun and type(data) == "table" then
+						applyConfigTable(data)
+						Config.SaveName = cleanName
+						if not silentMode then
+							setSaveStatus("Đã tải save: " .. cleanName, true)
+						end
+						return true
 					end
-					return true
 				end
 			end
 		end
@@ -611,8 +596,6 @@ local function loadConfigByName(rawName, silentMode)
 	if MemorySaves[cleanName] then
 		applyConfigTable(MemorySaves[cleanName])
 		Config.SaveName = cleanName
-		Config.FakeLag = false
-		releaseFakeLagState()
 		if not silentMode then
 			setSaveStatus("Đã tải save: " .. cleanName, true)
 		end
@@ -883,23 +866,26 @@ local function pickModelTargetPart(model)
 end
 
 local function mountGui(gui)
-	if not gui then return false end
-	gui.Enabled = true
+	local mounted = false
 	if type(gethui) == "function" then
 		local ok, hui = pcall(gethui)
-		if ok and hui and pcall(function() gui.Parent = hui end) then
-			return true
+		if ok and hui then
+			mounted = pcall(function() gui.Parent = hui end)
 		end
 	end
-	local okCore, core = pcall(function() return game:GetService("CoreGui") end)
-	if okCore and core and pcall(function() gui.Parent = core end) then
-		return true
+	if not mounted then
+		local okCore, core = pcall(function() return game:GetService("CoreGui") end)
+		if okCore and core then
+			mounted = pcall(function() gui.Parent = core end)
+		end
 	end
-	local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
-	if playerGui and pcall(function() gui.Parent = playerGui end) then
-		return true
+	if not mounted then
+		local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
+		if playerGui then
+			mounted = pcall(function() gui.Parent = playerGui end)
+		end
 	end
-	return false
+	return mounted
 end
 
 local MENU_WIDTH = 340
@@ -1134,28 +1120,13 @@ local function checkWallOcclusion(model, targetPart, aimPos, hum)
 	local direction = goalPos - origin
 	if not isFiniteVector3(direction) or direction.Magnitude <= 0.001 then return false, false end
 
-	SharedFilterBuf[1] = LocalPlayer.Character
-	SharedFilterBuf[2] = model
-	SharedWallParams.FilterDescendantsInstances = SharedFilterBuf
+	SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
 	local ok, result = pcall(function()
 		return Workspace:Raycast(origin, direction, SharedWallParams)
 	end)
 	if not ok or not result or not result.Instance then return false, false end
 	if isGhostOrNonSolidPart(result.Instance) then return false, false end
 	return true, false
-end
-
-local function getCachedEspWallBlocked(model, anchor, hum)
-	if not Config.ESPWallCheck then
-		return false
-	end
-	local cached = EspWallCache[model]
-	if cached and (elapsedClock - cached.t) < 0.05 then
-		return cached.blocked
-	end
-	local blocked = checkWallOcclusion(model, anchor, anchor.Position, hum)
-	EspWallCache[model] = { blocked = blocked, t = elapsedClock }
-	return blocked
 end
 
 local function isClearPathWithWallFlag(model, targetPart, aimPos, hum, wallFlag)
@@ -1272,24 +1243,23 @@ local function updateESPVisuals(cam, originPos)
 	end
 	ESPContainer.Visible = true
 	local maxEspDist = math.clamp(tonumber(Config.ESPMaxDistance) or 350, 150, 1500)
-	local maxDistStuds = math.max(maxEspDist, maxEspDist / 0.28)
 	local vp = cam.ViewportSize
 	if vp.X <= 0 or vp.Y <= 0 then
 		hideUnusedEspEntries(1)
 		return
 	end
 
-	table.clear(EspCandidatesBuf)
-	table.clear(EspSeenModelsBuf)
+	local candidates = {}
+	local seenModels = {}
 
 	if shouldTargetPlayers() then
 		for _, player in ipairs(Players:GetPlayers()) do
 			if isEnemyPlayer(player) then
 				local char = player.Character
 				local hum = char and char:FindFirstChildOfClass("Humanoid")
-				if char and hum and hum.Health > 0 and not EspSeenModelsBuf[char] then
-					EspSeenModelsBuf[char] = true
-					table.insert(EspCandidatesBuf, { model = char, hum = hum })
+				if char and hum and hum.Health > 0 and not seenModels[char] then
+					seenModels[char] = true
+					table.insert(candidates, { model = char, hum = hum })
 				end
 			end
 		end
@@ -1299,15 +1269,27 @@ local function updateESPVisuals(cam, originPos)
 		for _, entry in ipairs(CachedNpcEntries) do
 			local npcModel = entry.model
 			local hum = entry.hum
-			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 and not EspSeenModelsBuf[npcModel] then
-				EspSeenModelsBuf[npcModel] = true
-				table.insert(EspCandidatesBuf, { model = npcModel, hum = hum })
+			if npcModel and npcModel.Parent and not PlayerCharacterSet[npcModel] and npcModel ~= LocalPlayer.Character and hum and hum.Parent and hum.Health > 0 and not seenModels[npcModel] then
+				seenModels[npcModel] = true
+				table.insert(candidates, { model = npcModel, hum = hum })
+			end
+		end
+		for _, obj in ipairs(Workspace:GetDescendants()) do
+			if obj:IsA("Model") and not PlayerCharacterSet[obj] and obj ~= LocalPlayer.Character and not seenModels[obj] then
+				local hum = obj:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 then
+					seenModels[obj] = true
+					table.insert(candidates, { model = obj, hum = hum })
+				end
 			end
 		end
 	end
 
+	local fovTanHalf = math.tan(math.rad(math.clamp(tonumber(cam.FieldOfView) or 70, 10, 120) * 0.5))
+	local projScaleY = (vp.Y * 0.5) / math.max(fovTanHalf, 0.05)
+
 	local visualIndex = 0
-	for _, item in ipairs(EspCandidatesBuf) do
+	for _, item in ipairs(candidates) do
 		local model = item.model
 		local hum = item.hum
 		local hrp = model:FindFirstChild("HumanoidRootPart")
@@ -1320,13 +1302,17 @@ local function updateESPVisuals(cam, originPos)
 			local distStuds = (anchor.Position - originPos).Magnitude
 			local distMeters = math.floor(distStuds * 0.28 + 0.5)
 
-			if distStuds <= maxDistStuds or distMeters <= maxEspDist then
-				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, 1)
+			if distStuds <= math.max(maxEspDist, maxEspDist / 0.28) or distMeters <= maxEspDist then
+				local boxLeft, boxTop, boxW, boxH = getCompactCharacterScreenBox(model, hum, hrp, head, anchor, cam, vp, projScaleY)
 				if boxLeft then
 					visualIndex = visualIndex + 1
 					local entry = getOrCreateEspEntry(visualIndex)
 					if entry then
-						local isBlocked = getCachedEspWallBlocked(model, anchor, hum)
+						local isBlocked = false
+						if Config.ESPWallCheck then
+							local blockedFlag = checkWallOcclusion(model, anchor, anchor.Position, hum)
+							isBlocked = blockedFlag
+						end
 						local boxColor = isBlocked and COLOR_ESP_WALL_WHITE or COLOR_ESP_CLEAR_GREEN
 
 						if entry.box then
@@ -1395,7 +1381,7 @@ local function updateESPVisuals(cam, originPos)
 	hideUnusedEspEntries(visualIndex + 1)
 end
 
-local function buildMenuUI()
+pcall(function()
 	ScreenGui = Instance.new("ScreenGui")
 	ScreenGui.Name = "SilentAimGeminiGUI"
 	ScreenGui.ResetOnSpawn = false
@@ -1460,7 +1446,6 @@ local function buildMenuUI()
 	MainFrame.BackgroundColor3 = COLOR_BG_DARK
 	MainFrame.BorderSizePixel = 0
 	MainFrame.ClipsDescendants = true
-	MainFrame.Visible = true
 	MainFrame.ZIndex = 10
 	MainFrame.Parent = ScreenGui
 
@@ -2014,37 +1999,24 @@ local function buildMenuUI()
 		Config.FOVRadius = math.min(450, Config.FOVRadius + 15)
 		updateFOVVisual()
 	end)
-end
 
-local okUi, errUi = pcall(function()
-	buildMenuUI()
 	mountGui(ScreenGui)
 
-	pcall(function()
-		local autoFlag, autoName = loadAutoLoadMeta()
-		if autoFlag then
-			Config.AutoLoadEnabled = true
-			loadConfigByName(autoName, true)
-			if SaveStatusLabel then
-				setSaveStatus("Auto Load: " .. Config.SaveName, true)
-			end
+	local autoFlag, autoName = loadAutoLoadMeta()
+	if autoFlag then
+		Config.AutoLoadEnabled = true
+		loadConfigByName(autoName, true)
+		if SaveStatusLabel then
+			setSaveStatus("Auto Load: " .. Config.SaveName, true)
 		end
-	end)
-
-	Config.FakeLag = false
-	releaseFakeLagState()
+	end
 
 	switchTab(Config.ActiveTab)
 	syncWeaponRangeAuto()
 	syncAllUiTexts()
 	applyFarRenderState(Config.FarRender)
 	syncFakeLagEnemies(Config.FakeLag)
-	applyMenuVisibilityAndMinimize()
 end)
-
-if not okUi then
-	warn("[SilentAimGemini] UI init error: " .. tostring(errUi))
-end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -2169,9 +2141,7 @@ local function isModelInTriggerFOV(model, hum, cam, originPos, centerX, centerY,
 					end
 					local rayDelta = worldPt - cam.CFrame.Position
 					if rayDelta.Magnitude > 0.01 then
-						SharedFilterBuf[1] = LocalPlayer.Character
-						SharedFilterBuf[2] = model
-						SharedWallParams.FilterDescendantsInstances = SharedFilterBuf
+						SharedWallParams.FilterDescendantsInstances = { LocalPlayer.Character, model }
 						local okWall, wallHit = pcall(function()
 							return Workspace:Raycast(cam.CFrame.Position, rayDelta, SharedWallParams)
 						end)
